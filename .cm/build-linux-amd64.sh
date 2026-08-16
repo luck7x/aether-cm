@@ -60,10 +60,12 @@ install -m 0755 "${ROOT}/.cm/install-vps-bundle.sh" "${PACKAGE_ROOT}/install-vps
 install -m 0644 "${ROOT}/CM_README.md" "${PACKAGE_ROOT}/CM_README.md"
 
 tar -C "${OUTPUT_ROOT}" -czf "${ARCHIVE}" "${PACKAGE_NAME}"
-sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+(
+  cd "$(dirname "${ARCHIVE}")"
+  sha256sum "$(basename "${ARCHIVE}")" > "$(basename "${ARCHIVE}").sha256"
+)
 
 echo
 echo "Build complete:"
 echo "  ${ARCHIVE}"
 echo "  ${ARCHIVE}.sha256"
-
