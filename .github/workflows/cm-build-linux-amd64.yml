@@ -1,0 +1,61 @@
+name: CM Build Linux amd64
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'crates/**'
+      - 'frontend/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cm/**'
+      - '.github/workflows/cm-build-linux-amd64.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cm-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential clang cmake perl pkg-config
+
+      - name: Build release bundle
+        env:
+          AETHER_BUILD_VERSION: cm-${{ github.sha }}
+        run: ./.cm/build-linux-amd64.sh
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: aether-cm-linux-amd64-${{ github.sha }}
+          path: |
+            dist-cm/*.tar.gz
+            dist-cm/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
