@@ -14,7 +14,7 @@ on:
       - '.github/workflows/cm-build-linux-amd64.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: cm-build-${{ github.ref }}
@@ -59,3 +59,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Publish private prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: cm-${{ github.sha }}
+          name: Aether CM ${{ github.sha }}
+          prerelease: true
+          make_latest: false
+          generate_release_notes: false
+          files: |
+            dist-cm/*.tar.gz
+            dist-cm/*.sha256
+          fail_on_unmatched_files: true

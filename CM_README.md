@@ -8,8 +8,10 @@ Linux amd64 build and VPS deployment tooling under `.cm/`.
 1. Open the repository's **Actions** page.
 2. Select **CM Build Linux amd64**.
 3. Choose **Run workflow**.
-4. Download the generated `aether-cm-linux-amd64-*` artifact.
-5. Extract the artifact to obtain the `.tar.gz` release bundle.
+4. The workflow uploads an Actions artifact and automatically creates a
+   private prerelease tagged `cm-<commit-sha>`.
+5. Download the `.tar.gz` release bundle from the prerelease, or let the VPS
+   fetch it through the GitHub API with a repository-scoped token.
 
 Upload and install from WSL2 or Linux:
 
@@ -56,4 +58,3 @@ Do not commit any of the following:
 - provider or user API keys
 - WebDAV credentials
 - production logs or backups
-
