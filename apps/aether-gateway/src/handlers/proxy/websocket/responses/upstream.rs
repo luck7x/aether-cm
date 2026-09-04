@@ -16,13 +16,24 @@ use super::turn_state::ResponsesTurnState;
 use crate::ai_serving::{AiExecutionDecision, ResponsesWebSocketBodyNormalization};
 use crate::handlers::proxy::websocket::session::RESPONSES_WEBSOCKET_SESSION_LIMITS;
 use crate::handlers::proxy::websocket::transport::{
-    close_upstream_socket, connect_upstream_websocket, send_upstream_message,
+    close_upstream_socket, connect_upstream_websocket, send_upstream_message, WebSocketWriteError,
 };
 
 /// 上游 WebSocket 握手的默认绝对 deadline（30 秒）。
 /// 覆盖 DNS → TCP connect → TLS → HTTP 101 Upgrade → 发送首条 event 的完整链路。
 /// 如果 decision 配置了更短的 first_byte_ms 或 total_ms，取其与此值的较小者。
 const DEFAULT_UPSTREAM_HANDSHAKE_DEADLINE_MS: u64 = 30_000;
+
+/// Keep the physical provider socket active independently of downstream
+/// client pings. Client control frames terminate at Aether's trust boundary,
+/// so without this heartbeat a long-lived Pi session can keep its downstream
+/// socket healthy while the provider-side socket is silently reclaimed.
+pub(super) const UPSTREAM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
+
+pub(super) enum ResponsesUpstreamReceive {
+    Message(Option<Result<WreqWsMessage, wreq::Error>>),
+    Heartbeat(Result<(), WebSocketWriteError>),
+}
 
 /// 从 decision.timeouts 推导实际 handshake 绝对 deadline。
 /// 取 first_byte_ms / total_ms / DEFAULT 三者中的最小正值。
@@ -141,10 +152,44 @@ async fn bind_responses_upstream_inner(
 
 pub(super) async fn receive_optional_upstream(
     upstream: &mut Option<wreq::ws::WebSocket>,
-) -> Option<Result<WreqWsMessage, ()>> {
+    heartbeat_deadline: tokio::time::Instant,
+) -> ResponsesUpstreamReceive {
     match upstream.as_mut() {
-        Some(upstream) => upstream.recv().await.map(|message| message.map_err(|_| ())),
+        Some(upstream) => {
+            tokio::select! {
+                // Once due, do not let a busy/readable provider indefinitely
+                // starve the heartbeat branch.
+                biased;
+                _ = tokio::time::sleep_until(heartbeat_deadline) => {
+                    ResponsesUpstreamReceive::Heartbeat(
+                        send_upstream_message(
+                            upstream,
+                            WreqWsMessage::Ping(Default::default()),
+                        ).await,
+                    )
+                }
+                message = upstream.recv() => ResponsesUpstreamReceive::Message(message),
+            }
+        }
         None => std::future::pending().await,
+    }
+}
+
+pub(super) fn upstream_receive_error_class(error: &wreq::Error) -> &'static str {
+    if error.is_connection_reset() {
+        "connection_reset"
+    } else if error.is_timeout() {
+        "timeout"
+    } else if error.is_tls() {
+        "tls"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_upgrade() {
+        "upgrade"
+    } else if error.is_websocket() {
+        "websocket"
+    } else {
+        "other"
     }
 }
 
@@ -184,10 +229,16 @@ mod tests {
     use std::time::Duration;
 
     use aether_contracts::ExecutionTimeouts;
+    use futures_util::StreamExt;
+    use serde_json::json;
+    use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
 
     use crate::ai_serving::AiExecutionDecision;
 
-    use super::{resolve_upstream_handshake_deadline, DEFAULT_UPSTREAM_HANDSHAKE_DEADLINE_MS};
+    use super::{
+        receive_optional_upstream, resolve_upstream_handshake_deadline, ResponsesUpstreamReceive,
+        DEFAULT_UPSTREAM_HANDSHAKE_DEADLINE_MS,
+    };
 
     fn sample_decision() -> AiExecutionDecision {
         AiExecutionDecision {
@@ -300,7 +351,6 @@ mod tests {
         use super::bind_responses_upstream;
         use crate::ai_serving::ResponsesWebSocketBodyNormalization;
         use crate::handlers::proxy::websocket::responses::adapter::resolve_responses_websocket_adapter;
-        use serde_json::json;
 
         // 启动一个接受 TCP 连接但永不完成 HTTP Upgrade 的 mock 服务器
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -343,5 +393,57 @@ mod tests {
             result.err().expect("bind should fail with timeout"),
             "responses_websocket_upstream_handshake_timeout"
         );
+    }
+
+    #[tokio::test]
+    async fn due_heartbeat_sends_provider_ping() {
+        use super::bind_responses_upstream;
+        use crate::ai_serving::ResponsesWebSocketBodyNormalization;
+        use crate::handlers::proxy::websocket::responses::adapter::resolve_responses_websocket_adapter;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock listener should bind");
+        let addr = listener.local_addr().expect("should have local addr");
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("client should connect");
+            let mut websocket = tokio_tungstenite::accept_async(socket)
+                .await
+                .expect("server should complete upgrade");
+            assert!(matches!(
+                websocket.next().await,
+                Some(Ok(TungsteniteMessage::Text(_)))
+            ));
+            assert!(matches!(
+                websocket.next().await,
+                Some(Ok(TungsteniteMessage::Ping(payload))) if payload.is_empty()
+            ));
+        });
+
+        let mut decision = sample_decision();
+        decision.upstream_url = Some(format!("http://{addr}/v1/responses"));
+        decision.provider_request_body = Some(json!({"model": "test-model"}));
+        let adapter = resolve_responses_websocket_adapter(
+            crate::orchestration::ResponsesWebSocketAdapter::Standard,
+        );
+        let mut bound = bind_responses_upstream(
+            &decision,
+            ResponsesWebSocketBodyNormalization::for_tests("test-model"),
+            &json!({"type": "response.create", "model": "test-model"}),
+            adapter,
+        )
+        .await
+        .expect("upstream should bind");
+
+        let result =
+            receive_optional_upstream(&mut bound.upstream, tokio::time::Instant::now()).await;
+        assert!(matches!(
+            result,
+            ResponsesUpstreamReceive::Heartbeat(Ok(()))
+        ));
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .expect("server should observe heartbeat")
+            .expect("server task should succeed");
     }
 }

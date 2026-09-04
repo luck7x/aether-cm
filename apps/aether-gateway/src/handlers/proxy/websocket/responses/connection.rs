@@ -30,7 +30,10 @@ use super::turn::{
     ResponsesProviderAttempt, ResponsesWebSocketTurnObservation, ResponsesWebSocketTurnOutcome,
 };
 use super::turn_state::LogicalTurn;
-use super::upstream::{close_bound_upstream, receive_optional_upstream};
+use super::upstream::{
+    close_bound_upstream, receive_optional_upstream, upstream_receive_error_class,
+    ResponsesUpstreamReceive, UPSTREAM_HEARTBEAT_INTERVAL,
+};
 use crate::handlers::proxy::websocket::ingress::WebSocketRequestContext;
 use crate::handlers::proxy::websocket::session::{
     wait_for_optional_deadline, CLOSE_INTERNAL_ERROR, CLOSE_TRY_AGAIN, WEBSOCKET_LOG_TRANSPORT,
@@ -67,6 +70,7 @@ pub(super) async fn relay_bound_connection(
     state: &AppState,
     context: &WebSocketRequestContext,
 ) {
+    let mut upstream_heartbeat_deadline = tokio::time::Instant::now() + UPSTREAM_HEARTBEAT_INTERVAL;
     loop {
         let active_turn_deadline = bound.turn_state.attempt().map(|turn| turn.deadline());
         tokio::select! {
@@ -171,8 +175,82 @@ pub(super) async fn relay_bound_connection(
                     }
                 }
             }
-            upstream_message = receive_optional_upstream(&mut bound.upstream) => {
+            upstream_receive = receive_optional_upstream(
+                &mut bound.upstream,
+                upstream_heartbeat_deadline,
+            ) => {
+                let upstream_message = match upstream_receive {
+                    ResponsesUpstreamReceive::Heartbeat(Ok(())) => {
+                        upstream_heartbeat_deadline =
+                            tokio::time::Instant::now() + UPSTREAM_HEARTBEAT_INTERVAL;
+                        debug!(
+                            event_name = "responses_websocket_upstream_heartbeat_sent",
+                            log_type = "event",
+                            transport = WEBSOCKET_LOG_TRANSPORT,
+                            websocket = true,
+                            trace_id = %context.trace_id,
+                            provider_id = ?bound.decision_template.provider_id,
+                            endpoint_id = ?bound.decision_template.endpoint_id,
+                            key_id = ?bound.decision_template.key_id,
+                            active_turn = bound.turn_state.response_in_flight(),
+                            "gateway sent provider WebSocket heartbeat"
+                        );
+                        continue;
+                    }
+                    ResponsesUpstreamReceive::Heartbeat(Err(error)) => {
+                        upstream_heartbeat_deadline =
+                            tokio::time::Instant::now() + UPSTREAM_HEARTBEAT_INTERVAL;
+                        warn!(
+                            event_name = "responses_websocket_upstream_heartbeat_failed",
+                            log_type = "ops",
+                            transport = WEBSOCKET_LOG_TRANSPORT,
+                            websocket = true,
+                            trace_id = %context.trace_id,
+                            provider_id = ?bound.decision_template.provider_id,
+                            endpoint_id = ?bound.decision_template.endpoint_id,
+                            key_id = ?bound.decision_template.key_id,
+                            client_model = %bound.client_model,
+                            provider_model = %bound.provider_model,
+                            active_turn = bound.turn_state.response_in_flight(),
+                            error_code = error.as_str(),
+                            "Provider WebSocket heartbeat failed"
+                        );
+                        finalize_active_turn(
+                            bound,
+                            state,
+                            ResponsesWebSocketTurnOutcome::upstream_send_failed(),
+                        ).await;
+                        send_gateway_error_with_status(
+                            client_socket,
+                            502,
+                            "responses_websocket_heartbeat_failed",
+                            "Provider connection heartbeat failed",
+                        ).await;
+                        close_bound_upstream(bound).await;
+                        close_client_socket(
+                            client_socket,
+                            CLOSE_INTERNAL_ERROR,
+                            "upstream_heartbeat_failed",
+                        ).await;
+                        break;
+                    }
+                    ResponsesUpstreamReceive::Message(message) => message,
+                };
                 let Some(upstream_message) = upstream_message else {
+                    warn!(
+                        event_name = "responses_websocket_upstream_eof",
+                        log_type = "ops",
+                        transport = WEBSOCKET_LOG_TRANSPORT,
+                        websocket = true,
+                        trace_id = %context.trace_id,
+                        provider_id = ?bound.decision_template.provider_id,
+                        endpoint_id = ?bound.decision_template.endpoint_id,
+                        key_id = ?bound.decision_template.key_id,
+                        client_model = %bound.client_model,
+                        provider_model = %bound.provider_model,
+                        active_turn = bound.turn_state.response_in_flight(),
+                        "Provider WebSocket reached EOF"
+                    );
                     finalize_active_turn(
                         bound,
                         state,
@@ -182,30 +260,77 @@ pub(super) async fn relay_bound_connection(
                     close_client_socket(client_socket, 1000, "upstream_closed").await;
                     break;
                 };
-                let Ok(upstream_message) = upstream_message else {
+                let upstream_message = match upstream_message {
+                    Ok(message) => message,
+                    Err(error) => {
+                        let error_class = upstream_receive_error_class(&error);
+                        // A request URI may contain sensitive query parameters.
+                        // Keep the useful transport source chain but strip the URI
+                        // before it reaches logs.
+                        let error = error.without_uri();
+                        warn!(
+                            event_name = "responses_websocket_upstream_receive_failed",
+                            log_type = "ops",
+                            transport = WEBSOCKET_LOG_TRANSPORT,
+                            websocket = true,
+                            trace_id = %context.trace_id,
+                            provider_id = ?bound.decision_template.provider_id,
+                            endpoint_id = ?bound.decision_template.endpoint_id,
+                            key_id = ?bound.decision_template.key_id,
+                            provider_name = ?bound.decision_template.provider_name,
+                            client_model = %bound.client_model,
+                            provider_model = %bound.provider_model,
+                            active_turn = bound.turn_state.response_in_flight(),
+                            turn_index = ?bound.turn_state.logical().map(|turn| turn.turn_index),
+                            error_class,
+                            error = %error,
+                            "Upstream WebSocket receive failed"
+                        );
+                        finalize_active_turn(
+                            bound,
+                            state,
+                            ResponsesWebSocketTurnOutcome::upstream_receive_failed(),
+                        ).await;
+                        send_gateway_error_with_status(
+                            client_socket,
+                            502,
+                            "responses_websocket_receive_failed",
+                            "Provider connection closed unexpectedly",
+                        ).await;
+                        bound.upstream = None;
+                        close_client_socket(
+                            client_socket,
+                            CLOSE_INTERNAL_ERROR,
+                            "upstream_receive_failed",
+                        ).await;
+                        break;
+                    }
+                };
+                if let WreqWsMessage::Close(frame) = &upstream_message {
+                    let close_code = frame
+                        .as_ref()
+                        .map(|frame| u16::from(frame.code.clone()));
+                    let close_reason = frame
+                        .as_ref()
+                        .map(|frame| frame.reason.to_string())
+                        .unwrap_or_default();
                     warn!(
-                        event_name = "responses_websocket_upstream_receive_failed",
+                        event_name = "responses_websocket_upstream_close_received",
                         log_type = "ops",
                         transport = WEBSOCKET_LOG_TRANSPORT,
                         websocket = true,
                         trace_id = %context.trace_id,
-                        "Upstream WebSocket receive failed"
+                        provider_id = ?bound.decision_template.provider_id,
+                        endpoint_id = ?bound.decision_template.endpoint_id,
+                        key_id = ?bound.decision_template.key_id,
+                        client_model = %bound.client_model,
+                        provider_model = %bound.provider_model,
+                        active_turn = bound.turn_state.response_in_flight(),
+                        close_code,
+                        close_reason = %close_reason,
+                        "Provider WebSocket sent a Close frame"
                     );
-                    finalize_active_turn(
-                        bound,
-                        state,
-                        ResponsesWebSocketTurnOutcome::upstream_receive_failed(),
-                    ).await;
-                    send_gateway_error_with_status(
-                        client_socket,
-                        502,
-                        "responses_websocket_receive_failed",
-                        "Provider connection closed unexpectedly",
-                    ).await;
-                    bound.upstream = None;
-                    close_client_socket(client_socket, CLOSE_INTERNAL_ERROR, "upstream_receive_failed").await;
-                    break;
-                };
+                }
                 let parsed_upstream_frame = match &upstream_message {
                     WreqWsMessage::Text(text) => {
                         ParsedResponsesWebSocketFrame::parse(text.as_str()).ok()
