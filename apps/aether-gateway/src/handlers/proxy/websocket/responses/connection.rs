@@ -198,8 +198,6 @@ pub(super) async fn relay_bound_connection(
                         continue;
                     }
                     ResponsesUpstreamReceive::Heartbeat(Err(error)) => {
-                        upstream_heartbeat_deadline =
-                            tokio::time::Instant::now() + UPSTREAM_HEARTBEAT_INTERVAL;
                         warn!(
                             event_name = "responses_websocket_upstream_heartbeat_failed",
                             log_type = "ops",
