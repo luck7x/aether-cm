@@ -23,22 +23,27 @@ PACKAGE_NAME="aether-${BUILD_VERSION}-linux-amd64"
 PACKAGE_ROOT="${OUTPUT_ROOT}/${PACKAGE_NAME}"
 ARCHIVE="${OUTPUT_ROOT}/${PACKAGE_NAME}.tar.gz"
 
+rm -rf "${PACKAGE_ROOT}"
 mkdir -p "${PACKAGE_ROOT}/bin" "${PACKAGE_ROOT}/frontend"
 
-echo '[1/5] Installing frontend dependencies'
+echo '[1/7] Installing aether-vscodex web dependencies'
+cd "${ROOT}/aether-vscodex/web"
+npm ci
+
+echo '[2/7] Installing Aether frontend dependencies'
 cd "${ROOT}/frontend"
 npm ci
 
-echo '[2/5] Running model-permission regression test'
+echo '[3/7] Running model-permission regression test'
 npm run test:run -- \
   src/features/providers/components/__tests__/KeyAllowedModelsEditDialog.loading.spec.ts
 
-echo '[3/5] Building frontend'
+echo '[4/7] Building frontend (including embedded aether-vscodex web)'
 NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=4096}" \
 AETHER_BUILD_VERSION="${BUILD_VERSION}" \
   npm run build
 
-echo '[4/5] Building Linux amd64 gateway'
+echo '[5/7] Building Linux amd64 gateway'
 cd "${ROOT}"
 if [[ "${CM_LOW_MEMORY:-0}" == "1" ]]; then
   AETHER_BUILD_VERSION="${BUILD_VERSION}" \
@@ -53,12 +58,13 @@ else
     cargo build --release --locked -p aether-gateway
 fi
 
-echo '[5/5] Packaging release bundle'
+echo '[6/7] Assembling release bundle'
 install -m 0755 "${ROOT}/target/release/aether-gateway" "${PACKAGE_ROOT}/bin/aether-gateway"
 cp -a "${ROOT}/frontend/dist/." "${PACKAGE_ROOT}/frontend/"
 install -m 0755 "${ROOT}/.cm/install-vps-bundle.sh" "${PACKAGE_ROOT}/install-vps-bundle.sh"
 install -m 0644 "${ROOT}/CM_README.md" "${PACKAGE_ROOT}/CM_README.md"
 
+echo '[7/7] Packaging and checksumming release bundle'
 tar -C "${OUTPUT_ROOT}" -czf "${ARCHIVE}" "${PACKAGE_NAME}"
 (
   cd "$(dirname "${ARCHIVE}")"

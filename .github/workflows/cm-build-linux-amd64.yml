@@ -5,11 +5,13 @@ on:
   push:
     branches: [main]
     paths:
+      - 'aether-vscodex/**'
       - 'apps/**'
       - 'crates/**'
       - 'frontend/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain*'
       - '.cm/**'
       - '.github/workflows/cm-build-linux-amd64.yml'
 
@@ -23,7 +25,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       - uses: actions/checkout@v5
@@ -34,7 +36,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            aether-vscodex/web/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
 
