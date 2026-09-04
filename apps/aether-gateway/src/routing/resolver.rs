@@ -1,7 +1,7 @@
 use aether_routing_core::{
     resolve_routing_policy, MutationPlan, RankingOverlay, ResolvedRoutingPolicy,
-    RoutingGroupConfig, RoutingPolicyInput, RoutingRulePhase, RoutingSchedulingMode,
-    RoutingSetPriorityMode,
+    RoutingDefaultPolicy, RoutingGroupConfig, RoutingPolicyInput, RoutingRulePhase,
+    RoutingSchedulingMode, RoutingSetPriorityMode, DEFAULT_STICKY_KEY_ATTEMPTS,
 };
 use http::StatusCode;
 use serde_json::Value;
@@ -81,9 +81,7 @@ pub(crate) fn resolve_gateway_routing_policy(
 pub(crate) fn resolve_gateway_static_default_routing_policy(
     input: GatewayStaticRoutingPolicyInput<'_>,
 ) -> Result<Option<ResolvedRoutingPolicy>, GatewayError> {
-    let Some((priority_mode, scheduling_mode, keep_priority_on_conversion)) =
-        static_default_policy_fields(input.group_config_json)?
-    else {
+    let Some(default_policy) = static_default_policy_fields(input.group_config_json)? else {
         return Ok(None);
     };
 
@@ -93,9 +91,11 @@ pub(crate) fn resolve_gateway_static_default_routing_policy(
         selection_source: input.selection_source.to_string(),
         requested_model: input.requested_model.to_string(),
         resolved_model: input.resolved_model.to_string(),
-        priority_mode,
-        scheduling_mode,
-        keep_priority_on_conversion,
+        priority_mode: default_policy.priority_mode,
+        scheduling_mode: default_policy.scheduling_mode,
+        keep_priority_on_conversion: default_policy.keep_priority_on_conversion,
+        sticky_key_attempts: default_policy.sticky_key_attempts,
+        execution_policy: default_policy.execution_policy,
         ranking_overlay: RankingOverlay::default(),
         mutation_plan: MutationPlan::default(),
         pool_policy_overrides: BTreeMap::new(),
@@ -105,23 +105,21 @@ pub(crate) fn resolve_gateway_static_default_routing_policy(
 
 fn static_default_policy_fields(
     config_json: &Value,
-) -> Result<Option<(RoutingSetPriorityMode, RoutingSchedulingMode, bool)>, GatewayError> {
+) -> Result<Option<RoutingDefaultPolicy>, GatewayError> {
     let Some(object) = config_json.as_object() else {
         return Ok(None);
     };
-    if !routing_array_field_is_missing_or_empty(object, "allowed_models")
-        || !routing_array_field_is_missing_or_empty(object, "model_policies")
+    // A strategy's default policy applies to every model. Only model policies
+    // and rules require the request-context-aware resolver; unknown legacy
+    // fields (including the removed group allowlist) are intentionally ignored.
+    if !routing_array_field_is_missing_or_empty(object, "model_policies")
         || !routing_array_field_is_missing_or_empty(object, "rules")
     {
         return Ok(None);
     }
 
     let Some(default_policy) = object.get("default_policy") else {
-        return Ok(Some((
-            RoutingSetPriorityMode::default(),
-            RoutingSchedulingMode::default(),
-            false,
-        )));
+        return Ok(Some(RoutingDefaultPolicy::default()));
     };
     let Some(default_policy) = default_policy.as_object() else {
         return Ok(None);
@@ -141,12 +139,54 @@ fn static_default_policy_fields(
         })?,
         None => false,
     };
+    let sticky_key_attempts = match default_policy.get("sticky_key_attempts") {
+        Some(value) => value
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| {
+                invalid_routing_group_config("sticky_key_attempts must be a non-negative integer")
+            })?,
+        None => DEFAULT_STICKY_KEY_ATTEMPTS,
+    };
+    let enable_cf_heartbeat = routing_bool_field(
+        default_policy.get("enable_cf_heartbeat"),
+        "enable_cf_heartbeat",
+    )?;
+    // Older strategies stored separate image/text heartbeat flags. Treat
+    // either legacy flag as enabling the unified CF heartbeat setting while
+    // allowing newly saved strategies to use only the canonical key.
+    let legacy_image_heartbeat = routing_bool_field(
+        default_policy.get("enable_openai_image_sync_heartbeat"),
+        "enable_openai_image_sync_heartbeat",
+    )?;
+    let legacy_text_heartbeat = routing_bool_field(
+        default_policy.get("enable_standard_text_sync_heartbeat"),
+        "enable_standard_text_sync_heartbeat",
+    )?;
+    let execution_policy = aether_routing_core::RoutingExecutionPolicy {
+        enable_cf_heartbeat: enable_cf_heartbeat || legacy_image_heartbeat || legacy_text_heartbeat,
+        cyber_continue_failover: routing_bool_field(
+            default_policy.get("cyber_continue_failover"),
+            "cyber_continue_failover",
+        )?,
+    };
 
-    Ok(Some((
+    Ok(Some(RoutingDefaultPolicy {
         priority_mode,
         scheduling_mode,
         keep_priority_on_conversion,
-    )))
+        sticky_key_attempts,
+        execution_policy,
+    }))
+}
+
+fn routing_bool_field(value: Option<&Value>, field: &str) -> Result<bool, GatewayError> {
+    match value {
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| invalid_routing_group_config(format!("{field} must be a boolean"))),
+        None => Ok(false),
+    }
 }
 
 fn routing_array_field_is_missing_or_empty(
@@ -196,7 +236,7 @@ mod tests {
                 "scheduling_mode": "load_balance",
                 "keep_priority_on_conversion": true
             },
-            "allowed_models": [],
+            "allowed_models": ["legacy-model"],
             "model_policies": [],
             "rules": []
         });

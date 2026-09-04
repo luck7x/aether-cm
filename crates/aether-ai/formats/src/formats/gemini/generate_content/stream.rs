@@ -12,6 +12,7 @@ struct GeminiProviderToolState {
     call_id: String,
     name: String,
     arguments: String,
+    thought_signature: String,
     started_emitted: bool,
 }
 
@@ -128,7 +129,8 @@ impl GeminiProviderState {
                     let is_reasoning = part_object
                         .get("thought")
                         .and_then(Value::as_bool)
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                        || (text.trim().is_empty() && reasoning_signature.is_some());
                     let previous = if is_reasoning {
                         self.reasoning_parts.entry(index).or_default()
                     } else {
@@ -254,6 +256,16 @@ impl GeminiProviderState {
                     .and_then(Value::as_str)
                     .unwrap_or(tool_state.name.as_str())
                     .to_string();
+                if let Some(signature) = reasoning_signature {
+                    if tool_state.thought_signature != signature {
+                        tool_state.thought_signature = signature.clone();
+                        out.push(CanonicalStreamFrame {
+                            id: id.clone(),
+                            model: model.clone(),
+                            event: CanonicalStreamEvent::ToolCallSignature { index, signature },
+                        });
+                    }
+                }
                 if !tool_state.started_emitted {
                     out.push(CanonicalStreamFrame {
                         id: id.clone(),
@@ -360,6 +372,7 @@ struct GeminiClientToolState {
     call_id: String,
     name: String,
     arguments: String,
+    thought_signature: String,
     emitted: bool,
 }
 
@@ -434,7 +447,7 @@ impl GeminiClientEmitter {
             let args_value = parse_json_arguments_value(&tool_call.arguments)
                 .unwrap_or_else(|| Value::Object(Map::new()));
             tool_call.emitted = true;
-            pending.push(json!({
+            let mut part = json!({
                 "functionCall": {
                     "id": if tool_call.call_id.is_empty() {
                         build_generated_tool_call_id(*index)
@@ -448,7 +461,11 @@ impl GeminiClientEmitter {
                     },
                     "args": args_value,
                 }
-            }));
+            });
+            if !tool_call.thought_signature.is_empty() {
+                part["thoughtSignature"] = Value::String(tool_call.thought_signature.clone());
+            }
+            pending.push(part);
         }
         for part in pending {
             out.extend(self.emit_candidate(vec![part], None, None)?);
@@ -505,6 +522,10 @@ impl GeminiClientEmitter {
                 state.name = name;
                 Ok(Vec::new())
             }
+            CanonicalStreamEvent::ToolCallSignature { index, signature } => {
+                self.tool_calls.entry(index).or_default().thought_signature = signature;
+                Ok(Vec::new())
+            }
             CanonicalStreamEvent::ToolCallArgumentsDelta { index, arguments } => {
                 let emitted_part = {
                     let state = self.tool_calls.entry(index).or_default();
@@ -515,7 +536,7 @@ impl GeminiClientEmitter {
                         let args_value = parse_json_arguments_value(&state.arguments);
                         args_value.map(|args_value| {
                             state.emitted = true;
-                            json!({
+                            let mut part = json!({
                                 "functionCall": {
                                     "id": if state.call_id.is_empty() {
                                         build_generated_tool_call_id(index)
@@ -529,7 +550,12 @@ impl GeminiClientEmitter {
                                     },
                                     "args": args_value,
                                 }
-                            })
+                            });
+                            if !state.thought_signature.is_empty() {
+                                part["thoughtSignature"] =
+                                    Value::String(state.thought_signature.clone());
+                            }
+                            part
                         })
                     }
                 };
@@ -936,6 +962,56 @@ mod tests {
     }
 
     #[test]
+    fn gemini_provider_state_preserves_signature_only_reasoning_terminal() {
+        let mut state = GeminiProviderState::default();
+        let report_context = json!({});
+        let frames = state
+            .push_line(
+                &report_context,
+                data_line(json!({
+                    "response": {
+                        "responseId": "resp_signature_only_123",
+                        "modelVersion": "gemini-3.7-flash-tiered",
+                        "candidates": [{
+                            "index": 0,
+                            "finishReason": "MAX_TOKENS",
+                            "content": {
+                                "role": "model",
+                                "parts": [{
+                                    "text": "",
+                                    "thoughtSignature": "opaque-thought-signature"
+                                }]
+                            }
+                        }],
+                        "usageMetadata": {
+                            "promptTokenCount": 22,
+                            "thoughtsTokenCount": 29,
+                            "totalTokenCount": 51
+                        }
+                    },
+                    "traceId": "trace-signature-only"
+                })),
+            )
+            .expect("signature-only reasoning terminal should parse");
+
+        assert!(frames.iter().any(|frame| matches!(
+            frame.event,
+            CanonicalStreamEvent::ReasoningSignature(ref signature)
+                if signature == "opaque-thought-signature"
+        )));
+        assert!(frames.iter().any(|frame| matches!(
+            frame.event,
+            CanonicalStreamEvent::Finish {
+                ref finish_reason,
+                usage: Some(CanonicalUsage {
+                    reasoning_tokens: 29,
+                    ..
+                }),
+            } if finish_reason.as_deref() == Some("length")
+        )));
+    }
+
+    #[test]
     fn gemini_provider_state_parses_function_response_as_tool_result() {
         let mut state = GeminiProviderState::default();
         let report_context = json!({});
@@ -970,6 +1046,57 @@ mod tests {
                 ref content,
             } if tool_use_id == "call_123" && name == "lookup" && content == "{\"ok\":true}"
         )));
+    }
+
+    #[test]
+    fn gemini_provider_state_preserves_function_call_thought_signature() {
+        let mut state = GeminiProviderState::default();
+        let report_context = json!({});
+        let frames = state
+            .push_line(
+                &report_context,
+                data_line(json!({
+                    "responseId": "resp_signed_tool_123",
+                    "modelVersion": "gemini-3-flash-preview",
+                    "candidates": [{
+                        "index": 0,
+                        "content": {
+                            "parts": [{
+                                "functionCall": {
+                                    "id": "call_123",
+                                    "name": "lookup",
+                                    "args": {"query": "rust"}
+                                },
+                                "thoughtSignature": "opaque-tool-signature"
+                            }]
+                        }
+                    }]
+                })),
+            )
+            .expect("signed function call should parse");
+
+        let signature_index = frames
+            .iter()
+            .position(|frame| {
+                matches!(
+                    frame.event,
+                    CanonicalStreamEvent::ToolCallSignature {
+                        index: 0,
+                        ref signature,
+                    } if signature == "opaque-tool-signature"
+                )
+            })
+            .expect("tool signature event");
+        let call_index = frames
+            .iter()
+            .position(|frame| {
+                matches!(
+                    frame.event,
+                    CanonicalStreamEvent::ToolCallStart { index: 0, .. }
+                )
+            })
+            .expect("tool call start event");
+        assert!(signature_index < call_index);
     }
 
     #[test]

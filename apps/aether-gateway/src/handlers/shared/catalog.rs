@@ -443,7 +443,18 @@ fn provider_quota_metadata_bucket<'a>(
 fn provider_quota_timestamp_unix_secs(value: Option<&Value>) -> Option<u64> {
     let mut parsed = match value {
         Some(Value::Number(number)) => number.as_f64(),
-        Some(Value::String(text)) => text.trim().parse::<f64>().ok(),
+        Some(Value::String(text)) => {
+            let text = text.trim();
+            if let Ok(timestamp) = text.parse::<f64>() {
+                Some(timestamp)
+            } else {
+                return chrono::DateTime::parse_from_rfc3339(text)
+                    .ok()?
+                    .timestamp()
+                    .try_into()
+                    .ok();
+            }
+        }
         _ => None,
     }?;
     if !parsed.is_finite() || parsed <= 0.0 {
@@ -560,7 +571,10 @@ fn model_quota_window_snapshot(
         .map(|value| value.clamp(0.0, 1.0))
         .or_else(|| used_ratio.map(|value| (1.0 - value).max(0.0)));
     let reset_at = provider_quota_timestamp_unix_secs(
-        item.get("reset_at").or_else(|| item.get("next_reset_at")),
+        item.get("reset_at")
+            .or_else(|| item.get("next_reset_at"))
+            .or_else(|| item.get("reset_time"))
+            .or_else(|| item.get("next_reset_time")),
     );
     let reset_seconds = quota_window_reset_seconds(observed_at_unix_secs, reset_at);
     let is_exhausted = item
@@ -638,6 +652,112 @@ fn antigravity_model_quota_window_snapshot(
         }
     }
     Some(window)
+}
+
+fn antigravity_grouped_quota_window_snapshots(
+    metadata: &Map<String, Value>,
+    observed_at_unix_secs: Option<u64>,
+) -> Vec<Value> {
+    let mut windows = Vec::new();
+    let Some(groups) = metadata.get("quota_groups").and_then(Value::as_array) else {
+        return windows;
+    };
+
+    for (group_index, group) in groups.iter().filter_map(Value::as_object).enumerate() {
+        let group_code = group
+            .get("group_id")
+            .or_else(|| group.get("groupId"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("group:{group_index}"));
+        let group_label = group
+            .get("display_name")
+            .or_else(|| group.get("displayName"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("Quota group {}", group_index + 1));
+        let group_description = group
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+
+        for (bucket_index, bucket) in group
+            .get("buckets")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_object)
+            .enumerate()
+        {
+            let bucket_id = bucket
+                .get("bucket_id")
+                .or_else(|| bucket.get("bucketId"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| format!("bucket-{}", bucket_index + 1));
+            let Some(mut window) =
+                model_quota_window_snapshot(&bucket_id, bucket, observed_at_unix_secs)
+            else {
+                continue;
+            };
+            let Some(window) = window.as_object_mut() else {
+                continue;
+            };
+            let period = bucket
+                .get("window")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            let bucket_detail = bucket
+                .get("display_name")
+                .or_else(|| bucket.get("displayName"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| period.clone());
+            let bucket_label = bucket_detail
+                .filter(|detail| !detail.eq_ignore_ascii_case(&group_label))
+                .map(|detail| format!("{group_label} · {detail}"))
+                .unwrap_or_else(|| group_label.clone());
+            let description = bucket
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| group_description.clone());
+
+            window.insert(
+                "code".to_string(),
+                json!(format!("group:{group_index}:{bucket_id}")),
+            );
+            window.insert("label".to_string(), json!(bucket_label));
+            window.insert("scope".to_string(), json!("quota_group"));
+            window.remove("model");
+            window.insert("quota_group".to_string(), json!(group_code));
+            window.insert("quota_group_label".to_string(), json!(group_label));
+            window.insert("bucket_id".to_string(), json!(bucket_id));
+            if let Some(period) = period {
+                window.insert("window".to_string(), json!(period));
+            }
+            if let Some(description) = description {
+                window.insert("description".to_string(), json!(description));
+            }
+            windows.push(Value::Object(window.clone()));
+        }
+    }
+
+    windows
 }
 
 fn provider_quota_metadata_string(
@@ -975,7 +1095,7 @@ fn build_codex_quota_status_snapshot(
         .and_then(admin_provider_quota_pure::coerce_json_bool);
     let reset_credits = build_codex_reset_credits_status_snapshot(metadata, observed_at_unix_secs);
 
-    let windows = [
+    let mut windows = [
         codex_quota_window_snapshot(metadata, "primary", "weekly", "周", observed_at_unix_secs),
         codex_quota_window_snapshot(metadata, "secondary", "5h", "5H", observed_at_unix_secs),
         codex_quota_window_snapshot(
@@ -996,6 +1116,17 @@ fn build_codex_quota_status_snapshot(
     .into_iter()
     .flatten()
     .collect::<Vec<_>>();
+    if let Some(additional_windows) = metadata
+        .get("additional_quota_windows")
+        .and_then(Value::as_array)
+    {
+        windows.extend(
+            additional_windows
+                .iter()
+                .filter(|window| window.is_object())
+                .cloned(),
+        );
+    }
 
     if windows.is_empty()
         && plan_type.is_none()
@@ -1597,7 +1728,7 @@ fn build_antigravity_quota_status_snapshot(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let windows = provider_quota_model_bucket(metadata)
+    let mut windows = provider_quota_model_bucket(metadata)
         .map(|models| {
             models
                 .iter()
@@ -1611,6 +1742,13 @@ fn build_antigravity_quota_status_snapshot(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let grouped_observed_at_unix_secs =
+        provider_quota_timestamp_unix_secs(metadata.get("quota_groups_updated_at"))
+            .or(observed_at_unix_secs);
+    windows.extend(antigravity_grouped_quota_window_snapshots(
+        metadata,
+        grouped_observed_at_unix_secs,
+    ));
 
     if windows.is_empty() && observed_at_unix_secs.is_none() && !is_forbidden {
         return None;
@@ -3108,6 +3246,52 @@ mod tests {
     }
 
     #[test]
+    fn codex_wham_snapshot_does_not_duplicate_normalized_spark_windows() {
+        let codex = admin_provider_quota_pure::parse_codex_wham_usage_response(
+            &json!({
+                "plan_type": "plus",
+                "rate_limit": {
+                    "primary_window": {"used_percent": 25.0},
+                    "secondary_window": {"used_percent": 10.0}
+                },
+                "additional_rate_limits": [{
+                    "limit_name": "GPT-5.3-Codex-Spark",
+                    "rate_limit": {
+                        "primary_window": {
+                            "used_percent": 40.0,
+                            "limit_window_seconds": 18_000
+                        },
+                        "secondary_window": {
+                            "used_percent": 5.0,
+                            "limit_window_seconds": 604_800
+                        }
+                    }
+                }]
+            }),
+            1_777_000_000,
+        )
+        .expect("Codex WHAM quota should parse");
+        let upstream_metadata = json!({"codex": codex});
+        let payload = sync_provider_key_quota_status_snapshot(
+            None,
+            "codex",
+            Some(&upstream_metadata),
+            "refresh_api",
+        )
+        .expect("Codex quota snapshot should sync");
+        let windows = payload["quota"]["windows"]
+            .as_array()
+            .expect("quota windows should exist");
+        let spark_codes = windows
+            .iter()
+            .filter_map(|window| window.get("code").and_then(Value::as_str))
+            .filter(|code| code.starts_with("spark_"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(spark_codes, vec!["spark_5h", "spark_weekly"]);
+    }
+
+    #[test]
     fn provider_key_status_snapshot_payload_keeps_codex_free_window_quota_available() {
         let mut key = sample_catalog_key();
         key.upstream_metadata = Some(json!({
@@ -4083,7 +4267,8 @@ mod tests {
                     },
                     "claude-sonnet-4-6": {
                         "display_name": "Claude Sonnet 4.6 (Thinking)",
-                        "remaining_fraction": 0.3
+                        "remaining_fraction": 0.3,
+                        "reset_time": "2026-04-07T12:34:56Z"
                     }
                 }
             }
@@ -4128,6 +4313,78 @@ mod tests {
             label_for_model("claude-sonnet-4-6"),
             Some(json!("Claude Sonnet 4.6 (Thinking)"))
         );
+        let claude_window = windows
+            .iter()
+            .filter_map(Value::as_object)
+            .find(|window| window.get("model") == Some(&json!("claude-sonnet-4-6")))
+            .expect("Claude quota window should exist");
+        assert_eq!(
+            claude_window.get("reset_at"),
+            Some(&json!(1_775_565_296u64))
+        );
+        assert_eq!(claude_window.get("reset_seconds"), Some(&json!(12_011u64)));
+    }
+
+    #[test]
+    fn sync_provider_key_quota_status_snapshot_materializes_antigravity_group_windows() {
+        let upstream_metadata = json!({
+            "antigravity": {
+                "updated_at": 1_777_000_000u64,
+                "models": {
+                    "gemini-3.7-flash-tiered": {
+                        "remaining_fraction": 0.9
+                    }
+                },
+                "quota_groups": [{
+                    "display_name": "Claude and GPT models",
+                    "description": "Shared quota",
+                    "buckets": [{
+                        "bucket_id": "3p-5h",
+                        "window": "5h",
+                        "remaining_fraction": 0.25,
+                        "reset_time": "2026-05-05T05:00:00Z",
+                        "display_name": "5 hour"
+                    }, {
+                        "bucket_id": "3p-weekly",
+                        "window": "weekly",
+                        "remaining_fraction": 0.8,
+                        "reset_time": "2026-05-11T00:00:00Z"
+                    }]
+                }]
+            }
+        });
+
+        let payload = sync_provider_key_quota_status_snapshot(
+            None,
+            "antigravity",
+            Some(&upstream_metadata),
+            "refresh_api",
+        )
+        .expect("Antigravity quota snapshot should sync");
+        let windows = payload["quota"]["windows"]
+            .as_array()
+            .expect("quota windows should exist");
+        let five_hour = windows
+            .iter()
+            .find(|window| window["code"] == "group:0:3p-5h")
+            .expect("5h grouped quota window should exist");
+        let weekly = windows
+            .iter()
+            .find(|window| window["code"] == "group:0:3p-weekly")
+            .expect("weekly grouped quota window should exist");
+
+        assert_eq!(windows.len(), 3);
+        assert_eq!(five_hour["scope"], json!("quota_group"));
+        assert_eq!(five_hour["bucket_id"], json!("3p-5h"));
+        assert_eq!(five_hour["label"], json!("Claude and GPT models · 5 hour"));
+        assert_eq!(
+            five_hour["quota_group_label"],
+            json!("Claude and GPT models")
+        );
+        assert_eq!(five_hour["remaining_ratio"], json!(0.25));
+        assert_eq!(five_hour["used_ratio"], json!(0.75));
+        assert!(five_hour.get("model").is_none());
+        assert_eq!(weekly["window"], json!("weekly"));
     }
 
     #[test]

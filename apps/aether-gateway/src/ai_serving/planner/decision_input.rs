@@ -13,6 +13,7 @@ use http::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{json, Value};
 
 use crate::ai_serving::planner::common::extract_standard_requested_model;
+use crate::ai_serving::transport::CodexFingerprintConvergenceContext;
 use crate::ai_serving::{
     ClientSurface, ExecutionRuntimeAuthContext, GatewayAuthApiKeySnapshot,
     GatewayCredentialCarrier, GatewayProviderTransportSnapshot, PlannerAppState,
@@ -55,7 +56,7 @@ pub(crate) struct LocalRequestedModelDecisionInput {
     pub(crate) client_surface: Option<ClientSurface>,
     pub(crate) gateway_credential_carrier: Option<GatewayCredentialCarrier>,
     pub(crate) client_session_affinity: Option<ClientSessionAffinity>,
-    pub(crate) original_client_session_id: Option<String>,
+    pub(crate) codex_fingerprint_context: Option<CodexFingerprintConvergenceContext>,
     pub(crate) routing_policy: Option<ResolvedRoutingPolicy>,
     pub(crate) routing_trace_seed: Option<RoutingDecisionTrace>,
     pub(crate) routing_context: Option<LocalRoutingRequestContext>,
@@ -101,6 +102,22 @@ pub(crate) fn apply_provider_request_routing_policy_to_decision(
     input: &LocalRequestedModelDecisionInput,
     decision: &mut AiExecutionDecision,
     transport: Option<&GatewayProviderTransportSnapshot>,
+) -> Result<(), GatewayError> {
+    apply_provider_request_routing_policy_to_decision_with_websocket_mode(
+        input, decision, transport, false,
+    )
+}
+
+/// Applies provider-request routing mutations while retaining the transport
+/// boundary of a pinned Responses WebSocket continuation. Routing rules may
+/// mutate the body and therefore require a second provider-contract pass; the
+/// pass must use the same explicit continuation mode as the first pass rather
+/// than guessing from JSON fields.
+pub(crate) fn apply_provider_request_routing_policy_to_decision_with_websocket_mode(
+    input: &LocalRequestedModelDecisionInput,
+    decision: &mut AiExecutionDecision,
+    transport: Option<&GatewayProviderTransportSnapshot>,
+    websocket_continuation: bool,
 ) -> Result<(), GatewayError> {
     let provider_api_format = decision
         .provider_api_format
@@ -151,7 +168,7 @@ pub(crate) fn apply_provider_request_routing_policy_to_decision(
                 provider_api_format.as_str(),
             );
         }
-        apply_codex_oauth_fingerprint_convergence_to_decision(
+        apply_codex_fingerprint_convergence_to_decision(
             input,
             decision,
             transport,
@@ -214,7 +231,7 @@ pub(crate) fn apply_provider_request_routing_policy_to_decision(
                 provider_api_format.as_str(),
             );
         }
-        apply_codex_oauth_fingerprint_convergence_to_decision(
+        apply_codex_fingerprint_convergence_to_decision(
             input,
             decision,
             transport,
@@ -257,9 +274,8 @@ pub(crate) fn apply_provider_request_routing_policy_to_decision(
                 input.requested_model.as_str(),
             )
         });
-        crate::ai_serving::finalize_openai_provider_request_with_codex_model_capabilities(
-            &mut provider_request_body,
-            crate::ai_serving::OpenAiProviderRequestFinalization {
+        {
+            let finalization = crate::ai_serving::OpenAiProviderRequestFinalization {
                 source_api_format: context.client_api_format.as_str(),
                 provider_api_format: provider_api_format.as_str(),
                 provider_type: provider_type.as_str(),
@@ -270,9 +286,32 @@ pub(crate) fn apply_provider_request_routing_policy_to_decision(
                 require_body_stream_field: original_provider_request_body
                     .as_ref()
                     .is_some_and(|body| body.get("stream").is_some()),
-            },
-            model_capabilities.as_ref(),
-        )
+            };
+            let reasoning_replay_policy = transport
+                .map(|transport| {
+                    crate::ai_serving::openai_responses_reasoning_replay_policy(
+                        transport.provider.provider_type.as_str(),
+                        transport.endpoint.base_url.as_str(),
+                        provider_model.as_str(),
+                    )
+                })
+                .unwrap_or_default();
+            if websocket_continuation {
+                crate::ai_serving::finalize_openai_provider_request_with_codex_model_capabilities_and_reasoning_replay_policy_for_websocket_continuation(
+                    &mut provider_request_body,
+                    finalization,
+                    model_capabilities.as_ref(),
+                    reasoning_replay_policy,
+                )
+            } else {
+                crate::ai_serving::finalize_openai_provider_request_with_codex_model_capabilities_and_reasoning_replay_policy(
+                    &mut provider_request_body,
+                    finalization,
+                    model_capabilities.as_ref(),
+                    reasoning_replay_policy,
+                )
+            }
+        }
         .map_err(|violation| GatewayError::Client {
             status: StatusCode::BAD_REQUEST,
             message: format!("routing provider_request violates provider contract: {violation:?}"),
@@ -318,7 +357,7 @@ pub(crate) fn apply_provider_request_routing_policy_to_decision(
     if original_provider_request_body.is_some() {
         decision.provider_request_body = Some(provider_request_body);
     }
-    apply_codex_oauth_fingerprint_convergence_to_decision(
+    apply_codex_fingerprint_convergence_to_decision(
         input,
         decision,
         transport,
@@ -328,7 +367,7 @@ pub(crate) fn apply_provider_request_routing_policy_to_decision(
     Ok(())
 }
 
-fn apply_codex_oauth_fingerprint_convergence_to_decision(
+fn apply_codex_fingerprint_convergence_to_decision(
     input: &LocalRequestedModelDecisionInput,
     decision: &mut AiExecutionDecision,
     transport: Option<&GatewayProviderTransportSnapshot>,
@@ -339,13 +378,24 @@ fn apply_codex_oauth_fingerprint_convergence_to_decision(
     else {
         return;
     };
-    crate::ai_serving::transport::apply_codex_oauth_fingerprint_convergence(
+    let Some(context) = input.codex_fingerprint_context.as_ref() else {
+        return;
+    };
+    let applied = crate::ai_serving::transport::apply_codex_fingerprint_convergence_with_context(
         transport,
         provider_api_format,
-        input.original_client_session_id.as_deref(),
+        context,
         &mut decision.provider_request_headers,
         provider_request_body,
     );
+    if applied {
+        decision.prompt_cache_key = provider_request_body
+            .get("prompt_cache_key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+    }
 }
 
 struct GatewayAuthenticatedDecisionInputPort<'a> {
@@ -434,7 +484,7 @@ pub(crate) fn build_local_requested_model_decision_input(
         client_surface: None,
         gateway_credential_carrier: None,
         client_session_affinity: None,
-        original_client_session_id: None,
+        codex_fingerprint_context: None,
         routing_policy: None,
         routing_trace_seed: None,
         routing_context: None,
@@ -449,8 +499,8 @@ pub(crate) async fn attach_routing_policy_to_local_requested_model_input(
     body_json: &Value,
     client_api_format: &str,
 ) -> Result<(), GatewayError> {
-    input.original_client_session_id = routing_header_value_str(&parts.headers, "session-id")
-        .or_else(|| routing_header_value_str(&parts.headers, "session_id"));
+    input.codex_fingerprint_context =
+        Some(crate::ai_serving::codex_context::resolve_codex_fingerprint_context(parts, body_json));
     let explicit_group = routing_header_value_str(&parts.headers, ROUTING_GROUP_HEADER);
     let selected_group = match state.routing_group_read_repository() {
         Some(repository) => {
@@ -575,21 +625,17 @@ pub(crate) async fn attach_routing_policy_to_local_requested_model_input(
                     GatewayRoutingSelectionError::NotFound(explicit_group.unwrap_or_default()),
                 ));
             }
-            None
+            return Err(routing_selection_error(
+                GatewayRoutingSelectionError::NoDefault,
+            ));
         }
     };
 
     let Some((group_id, group_version, group_config_json, selection_source)) = selected_group
     else {
-        input.client_session_affinity = client_session_affinity_from_api_request(
-            client_api_format,
-            &parts.headers,
-            Some(body_json),
-        );
-        input.routing_policy = None;
-        input.routing_trace_seed = None;
-        input.routing_context = None;
-        return Ok(());
+        return Err(routing_selection_error(
+            GatewayRoutingSelectionError::NoDefault,
+        ));
     };
 
     if try_attach_static_default_routing_policy_to_input(
@@ -813,6 +859,10 @@ fn routing_selection_error(error: GatewayRoutingSelectionError) -> GatewayError 
         GatewayRoutingSelectionError::Repository(message) => {
             GatewayError::Internal(format!("routing group repository lookup failed: {message}"))
         }
+        GatewayRoutingSelectionError::NoDefault => GatewayError::Client {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: "no enabled routing strategy is configured for this request".to_string(),
+        },
         error => GatewayError::Client {
             status: StatusCode::FORBIDDEN,
             message: error.to_string(),
@@ -1023,6 +1073,7 @@ fn ensure_report_context_routing_trace(
                 endpoint_id: decision.endpoint_id.clone().unwrap_or_default(),
                 model_id,
                 key_id,
+                api_format: decision.provider_api_format.clone(),
                 provider_priority,
                 key_priority,
             },
@@ -1156,6 +1207,7 @@ mod tests {
                 description: None,
                 enabled: true,
                 is_system_default: false,
+                sort_order: 0,
                 config_json: json!({}),
                 version: 1,
                 created_at: 1,
@@ -1276,7 +1328,7 @@ mod tests {
             client_surface: None,
             gateway_credential_carrier: None,
             client_session_affinity: None,
-            original_client_session_id: None,
+            codex_fingerprint_context: None,
             routing_policy: None,
             routing_trace_seed: None,
             model_directive_policy: Default::default(),
@@ -1525,7 +1577,7 @@ mod tests {
             client_surface: None,
             gateway_credential_carrier: None,
             client_session_affinity: None,
-            original_client_session_id: None,
+            codex_fingerprint_context: None,
             routing_policy: None,
             routing_trace_seed: None,
             model_directive_policy: Default::default(),
@@ -1595,7 +1647,7 @@ mod tests {
             client_surface: None,
             gateway_credential_carrier: None,
             client_session_affinity: None,
-            original_client_session_id: None,
+            codex_fingerprint_context: None,
             routing_policy: None,
             routing_trace_seed: None,
             routing_context: None,
@@ -1680,7 +1732,13 @@ mod tests {
         });
         let mut with_mutation = sample_decision_input();
         for input in [&mut no_context, &mut empty_mutation, &mut with_mutation] {
-            input.original_client_session_id = Some("client-session-1".to_string());
+            input.codex_fingerprint_context = Some(
+                CodexFingerprintConvergenceContext::new(
+                    uuid::Uuid::new_v4().to_string(),
+                    1_756_668_000_000,
+                )
+                .with_original_client_session_id("client-session-1".to_string()),
+            );
         }
 
         let mut stable_identity = None;
@@ -1727,6 +1785,10 @@ mod tests {
                 .provider_request_body
                 .as_ref()
                 .expect("request body");
+            assert_eq!(
+                decision.prompt_cache_key.as_deref(),
+                body.get("prompt_cache_key").and_then(Value::as_str)
+            );
             assert_eq!(
                 body["prompt_cache_key"],
                 "172c39e6-c0a0-5a70-8b63-e0f8e0d185a3"
@@ -1931,6 +1993,7 @@ mod tests {
 
         let body = decision.provider_request_body.as_ref().expect("body");
         assert!(body.get("prompt_cache_key").is_none());
+        assert!(decision.prompt_cache_key.is_none());
         assert!(body.get("client_metadata").is_none());
         assert!(!decision.provider_request_headers.contains_key("session-id"));
         assert!(!decision.provider_request_headers.contains_key("thread-id"));

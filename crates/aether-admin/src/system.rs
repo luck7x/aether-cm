@@ -770,6 +770,12 @@ const ADMIN_API_FORMAT_DEFINITIONS: &[AdminApiFormatDefinition] = &[
         aliases: &["responses_compact"],
     },
     AdminApiFormatDefinition {
+        value: "openai:realtime",
+        label: "OpenAI Realtime",
+        default_path: "/v1/realtime",
+        aliases: &["openai_realtime", "realtime"],
+    },
+    AdminApiFormatDefinition {
         value: "openai:search",
         label: "OpenAI Search",
         default_path: "/v1/alpha/search",
@@ -798,6 +804,12 @@ const ADMIN_API_FORMAT_DEFINITIONS: &[AdminApiFormatDefinition] = &[
         label: "OpenAI Video",
         default_path: "/v1/videos",
         aliases: &["openai_video", "sora"],
+    },
+    AdminApiFormatDefinition {
+        value: "codex:live",
+        label: "OpenAI Live",
+        default_path: "/v1/live",
+        aliases: &["codex_live", "live"],
     },
     AdminApiFormatDefinition {
         value: "claude:messages",
@@ -1713,8 +1725,6 @@ pub fn admin_system_config_default_value(key: &str) -> Option<serde_json::Value>
         "proxy_node_metrics_cleanup_batch_size" => Some(json!(5000)),
         "enable_provider_checkin" => Some(json!(true)),
         "provider_checkin_time" => Some(json!("01:05")),
-        "provider_priority_mode" => Some(json!("provider")),
-        "scheduling_mode" => Some(json!("cache_affinity")),
         "auto_delete_expired_keys" => Some(json!(false)),
         "turnstile_enabled" => Some(json!(false)),
         "turnstile_site_key" => Some(serde_json::Value::Null),
@@ -1742,10 +1752,8 @@ pub fn admin_system_config_default_value(key: &str) -> Option<serde_json::Value>
         "email_suffix_mode" => Some(json!("none")),
         "email_suffix_list" => Some(json!([])),
         "enable_format_conversion" => Some(json!(false)),
-        "cyber_continue_failover" => Some(json!(false)),
         "enable_model_directives" => Some(json!(false)),
         "model_directives" => Some(aether_ai_formats::default_model_directives_config()),
-        "keep_priority_on_conversion" => Some(json!(false)),
         "audit_log_retention_days" => Some(json!(30)),
         "enable_db_maintenance" => Some(json!(true)),
         "system_proxy_node_id" => Some(serde_json::Value::Null),
@@ -2224,8 +2232,7 @@ pub fn parse_admin_system_config_update(
     }
 
     match normalized_key.as_str() {
-        "cyber_continue_failover"
-        | "enable_model_directives"
+        "enable_model_directives"
         | "module.important_notification.enabled"
         | "module.important_notification.email_enabled"
         | "module.server_chan_push.enabled"
@@ -3122,6 +3129,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn api_formats_payload_exposes_realtime_and_codex_live_separately() {
+        let payload = build_admin_api_formats_payload();
+        let formats = payload["formats"]
+            .as_array()
+            .expect("formats payload should be an array");
+        let realtime = formats
+            .iter()
+            .find(|format| format["value"] == "openai:realtime")
+            .expect("OpenAI Realtime format should be registered");
+        let live = formats
+            .iter()
+            .find(|format| format["value"] == "codex:live")
+            .expect("OpenAI Live format should be registered");
+
+        assert_eq!(realtime["label"], "OpenAI Realtime");
+        assert_eq!(realtime["default_path"], "/v1/realtime");
+        assert_eq!(
+            realtime["aliases"],
+            serde_json::json!(["openai_realtime", "realtime"])
+        );
+        assert_eq!(live["label"], "OpenAI Live");
+        assert_eq!(live["default_path"], "/v1/live");
+        assert_eq!(live["aliases"], serde_json::json!(["codex_live", "live"]));
+    }
+
+    #[test]
     fn build_admin_system_check_update_payload_reports_available_release() {
         let payload = build_admin_system_check_update_payload_with_release(
             "0.7.0-rc27".to_string(),
@@ -3468,28 +3501,6 @@ mod tests {
             admin_system_config_default_value("backup_s3_user_agent"),
             Some(json!("rclone/v1.68.0"))
         );
-    }
-
-    #[test]
-    fn cyber_continue_failover_defaults_to_disabled() {
-        assert_eq!(
-            admin_system_config_default_value("cyber_continue_failover"),
-            Some(json!(false))
-        );
-    }
-
-    #[test]
-    fn cyber_continue_failover_update_requires_a_boolean() {
-        let update =
-            parse_admin_system_config_update("cyber_continue_failover", br#"{"value":true}"#)
-                .expect("boolean Cyber failover setting should parse");
-        assert_eq!(update.value, json!(true));
-
-        assert!(parse_admin_system_config_update(
-            "cyber_continue_failover",
-            br#"{"value":"true"}"#,
-        )
-        .is_err());
     }
 
     #[test]

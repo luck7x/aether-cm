@@ -47,7 +47,8 @@ fn pending_backfills_from_applied_returns_all_versions_when_none_applied() {
             20260504120000,
             20260505120000,
             20260517012000,
-            20260716010000
+            20260716010000,
+            20260722140744
         ]
     );
 }
@@ -68,7 +69,8 @@ fn pending_backfills_from_applied_skips_versions_already_applied() {
             20260504120000,
             20260505120000,
             20260517012000,
-            20260716010000
+            20260716010000,
+            20260722140744
         ]
     );
 }
@@ -306,6 +308,31 @@ INSERT INTO usage_settlement_snapshots (
         .unwrap_or_else(|error| panic!("mysql {table} legacy flag should load: {error}"));
         assert!(!enabled, "mysql {table}.enabled should follow is_active");
     }
+}
+
+#[tokio::test]
+async fn pending_sqlite_backfills_does_not_create_tracking_table() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("sqlite backfill status pool should connect");
+    run_sqlite_migrations(&pool)
+        .await
+        .expect("sqlite schema should migrate");
+
+    let pending = pending_sqlite_backfills(&pool)
+        .await
+        .expect("sqlite pending backfills should load");
+    assert!(!pending.is_empty());
+
+    let tracking_tables: i64 = query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_backfills'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("sqlite tracking table state should load");
+    assert_eq!(tracking_tables, 0);
 }
 
 #[tokio::test]
@@ -965,13 +992,14 @@ async fn run_backfills_rebuilds_stats_and_records_execution() {
     let pending_before = pending_backfills(&pool)
         .await
         .expect("pending backfills should load");
-    assert_eq!(pending_before.len(), 6);
+    assert_eq!(pending_before.len(), 7);
     assert_eq!(pending_before[0].version, 20260422110000);
     assert_eq!(pending_before[1].version, 20260422120000);
     assert_eq!(pending_before[2].version, 20260504120000);
     assert_eq!(pending_before[3].version, 20260505120000);
     assert_eq!(pending_before[4].version, 20260517012000);
     assert_eq!(pending_before[5].version, 20260716010000);
+    assert_eq!(pending_before[6].version, 20260722140744);
 
     run_backfills(&pool)
         .await
@@ -995,7 +1023,8 @@ async fn run_backfills_rebuilds_stats_and_records_execution() {
             20260504120000,
             20260505120000,
             20260517012000,
-            20260716010000
+            20260716010000,
+            20260722140744
         ]
     );
 
@@ -1669,5 +1698,5 @@ ORDER BY total_tokens
         .fetch_one(&pool)
         .await
         .expect("backfill count should load");
-    assert_eq!(applied_count, 6);
+    assert_eq!(applied_count, 7);
 }
