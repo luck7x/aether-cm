@@ -179,7 +179,7 @@
               <div class="flex items-center gap-2">
                 <span class="truncate text-sm font-medium">{{ row.name }}</span>
                 <span
-                  v-if="row.kind === 'pool'"
+                  v-if="poolProviderIds.has(row.id)"
                   class="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary"
                 >
                   Pool
@@ -324,6 +324,7 @@ import {
   type RoutingPriorityMode,
   type RoutingSchedulingMode,
 } from '../utils/routingPolicy'
+import { buildRoutingProviderSummaryQuery } from '../utils/providerQuery'
 
 interface ProviderPriorityRow {
   id: string
@@ -367,6 +368,8 @@ interface GlobalKeySource {
 const props = defineProps<{
   config: RoutingGroupConfig
   model?: string
+  modelId?: string
+  providerModelIds?: string[]
   priorityMode?: RoutingPriorityMode
   schedulingMode?: RoutingSchedulingMode
   showPriorityMode?: boolean
@@ -398,6 +401,7 @@ const draggedKeyId = ref<string | null>(null)
 const dragOverKeyId = ref<string | null>(null)
 const providerMultiSelectEnabled = ref(false)
 const selectedProviderIds = ref<Set<string>>(new Set())
+let providerLoadRequestId = 0
 
 const config = computed(() => normalizeRoutingGroupConfig(props.config))
 const targetModel = computed(() => props.model?.trim() || DEFAULT_ROUTING_POLICY_MODEL)
@@ -442,7 +446,10 @@ const poolProviderIds = computed(() => {
 
 const providerRows = computed<ProviderPriorityRow[]>(() => {
   const overrides = targetModelPolicy.value.provider_priority_overrides
+  // 多选模型取提供商并集；空数组表示模型尚未解析，不能回退到全部提供商。
+  const modelIds = props.providerModelIds === undefined ? null : new Set(props.providerModelIds)
   return providers.value
+    .filter(provider => !modelIds || provider.global_model_ids?.some(id => modelIds.has(id)))
     .map(provider => ({
       id: provider.id,
       name: provider.name,
@@ -505,6 +512,12 @@ watch(effectivePriorityMode, mode => {
     providerMultiSelectEnabled.value = false
     selectedProviderIds.value = new Set()
   }
+  void loadProviders()
+})
+
+// 父组件异步解析全局模型 ID 后，重新加载对应模型的提供商列表。
+watch([targetModel, () => props.modelId], () => {
+  void loadProviders()
 })
 
 watch(providerRows, rows => {
@@ -561,16 +574,31 @@ function updateSchedulingMode(mode: RoutingSchedulingMode): void {
 }
 
 async function loadProviders(): Promise<void> {
+  const requestId = ++providerLoadRequestId
   loadingProviders.value = true
   loadError.value = null
   try {
-    const response = await getProvidersSummary({ page: 1, page_size: 9999 })
+    const query = buildRoutingProviderSummaryQuery(
+      targetModel.value,
+      props.modelId,
+      effectivePriorityMode.value,
+    )
+    if (!query) {
+      providers.value = []
+      return
+    }
+
+    const response = await getProvidersSummary(query)
+    if (requestId !== providerLoadRequestId) return
     providers.value = response.items
   } catch (err) {
+    if (requestId !== providerLoadRequestId) return
     loadError.value = parseApiError(err, '加载 Provider 失败')
     providers.value = []
   } finally {
-    loadingProviders.value = false
+    if (requestId === providerLoadRequestId) {
+      loadingProviders.value = false
+    }
   }
 }
 

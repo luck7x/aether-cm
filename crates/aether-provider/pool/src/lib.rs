@@ -22,18 +22,20 @@ pub use providers::{
     build_windsurf_pool_model_configs_request,
     build_windsurf_pool_model_configs_request_with_base_url, build_windsurf_pool_quota_request,
     build_windsurf_pool_quota_request_with_base_url, build_windsurf_pool_rate_limit_request,
-    build_windsurf_pool_rate_limit_request_with_base_url, enrich_chatgpt_web_quota_metadata,
-    grok_mode_id_for_model, grok_pool_tier_from_quota_bucket, grok_quota_window_key_for_model,
+    build_windsurf_pool_rate_limit_request_with_base_url, build_xai_pool_billing_request,
+    build_xai_pool_user_request, enrich_chatgpt_web_quota_metadata, grok_mode_id_for_model,
+    grok_pool_tier_from_quota_bucket, grok_quota_window_key_for_model,
     grok_supported_quota_windows_for_tier, normalize_chatgpt_web_image_quota_limit,
     AntigravityProviderPoolAdapter, ChatGptWebProviderPoolAdapter, CodexProviderPoolAdapter,
     DefaultProviderPoolAdapter, GeminiCliProviderPoolAdapter, GrokProviderPoolAdapter,
     KiroPoolQuotaAuthInput, KiroProviderPoolAdapter, UnsupportedQuotaProviderPoolAdapter,
-    ANTIGRAVITY_FETCH_AVAILABLE_MODELS_PATH, ANTIGRAVITY_RETRIEVE_USER_QUOTA_SUMMARY_PATH,
-    CHATGPT_WEB_CONVERSATION_INIT_PATH, CHATGPT_WEB_DEFAULT_BASE_URL,
-    CODEX_WHAM_RESET_CREDITS_CONSUME_URL, CODEX_WHAM_RESET_CREDITS_URL, CODEX_WHAM_USAGE_URL,
-    GEMINI_CLI_RETRIEVE_USER_QUOTA_PATH, GEMINI_CLI_USER_AGENT, KIRO_USAGE_LIMITS_PATH,
-    KIRO_USAGE_SDK_VERSION, WINDSURF_MODEL_CONFIGS_PATH, WINDSURF_RATE_LIMIT_PATH,
-    WINDSURF_USER_STATUS_PATH,
+    XaiProviderPoolAdapter, ANTIGRAVITY_FETCH_AVAILABLE_MODELS_PATH,
+    ANTIGRAVITY_RETRIEVE_USER_QUOTA_SUMMARY_PATH, CHATGPT_WEB_CONVERSATION_INIT_PATH,
+    CHATGPT_WEB_DEFAULT_BASE_URL, CODEX_WHAM_RESET_CREDITS_CONSUME_URL,
+    CODEX_WHAM_RESET_CREDITS_URL, CODEX_WHAM_USAGE_URL, GEMINI_CLI_RETRIEVE_USER_QUOTA_PATH,
+    GEMINI_CLI_USER_AGENT, KIRO_USAGE_LIMITS_PATH, KIRO_USAGE_SDK_VERSION,
+    WINDSURF_MODEL_CONFIGS_PATH, WINDSURF_RATE_LIMIT_PATH, WINDSURF_USER_STATUS_PATH,
+    XAI_BILLING_PATH, XAI_USER_PATH,
 };
 pub use quota::{
     provider_pool_key_account_quota_exhausted, provider_pool_key_model_quota_exhausted,
@@ -81,7 +83,8 @@ mod tests {
                 "grok",
                 "kiro",
                 "vertex_ai",
-                "windsurf"
+                "windsurf",
+                "xai"
             ]
         );
         assert!(service
@@ -104,7 +107,8 @@ mod tests {
                 "gemini_cli",
                 "grok",
                 "kiro",
-                "windsurf"
+                "windsurf",
+                "xai"
             ]
         );
         assert!(service.supports_quota_refresh("codex"));
@@ -112,6 +116,7 @@ mod tests {
         assert!(service.supports_quota_refresh("grok"));
         assert!(service.supports_quota_refresh("gemini_cli"));
         assert!(service.supports_quota_refresh("windsurf"));
+        assert!(service.supports_quota_refresh("xai"));
         assert_eq!(
             service.quota_refresh_unsupported_message("claude_code"),
             "Claude Code 暂不支持自动刷新额度：上游没有稳定可用的账号额度查询接口"
@@ -367,6 +372,34 @@ mod tests {
     }
 
     #[test]
+    fn kiro_quota_request_rejects_region_url_injection() {
+        let spec = build_kiro_pool_quota_request(
+            "key-1",
+            &KiroPoolQuotaAuthInput {
+                authorization_value: "Bearer sensitive-access-token".to_string(),
+                api_region: "attacker.example/evil".to_string(),
+                kiro_version: "0.3.210".to_string(),
+                machine_id: "machine".to_string(),
+                profile_arn: None,
+            },
+        );
+
+        assert_eq!(
+            spec.url,
+            "https://q.us-east-1.amazonaws.com/getUsageLimits?origin=AI_EDITOR&resourceType=AGENTIC_REQUEST&isEmailRequired=true"
+        );
+        assert_eq!(
+            spec.headers.get("host").map(String::as_str),
+            Some("q.us-east-1.amazonaws.com")
+        );
+        assert!(!spec.url.contains("attacker.example"));
+        assert!(!spec
+            .headers
+            .get("host")
+            .is_some_and(|value| value.contains("attacker.example")));
+    }
+
+    #[test]
     fn chatgpt_web_quota_request_uses_default_base_url_when_empty() {
         let spec = build_chatgpt_web_pool_quota_request(
             "key-1",
@@ -382,7 +415,6 @@ mod tests {
             spec.headers.get("origin").map(String::as_str),
             Some("https://chatgpt.com")
         );
-        assert!(spec.accept_invalid_certs);
     }
 
     #[test]
@@ -615,11 +647,11 @@ mod tests {
 
         assert_eq!(
             free_first["providers"],
-            json!(["codex", "grok", "kiro", "windsurf"])
+            json!(["codex", "grok", "kiro", "windsurf", "xai"])
         );
         assert_eq!(
             recent_refresh["providers"],
-            json!(["codex", "grok", "kiro", "windsurf"])
+            json!(["codex", "grok", "kiro", "windsurf", "xai"])
         );
         assert_eq!(free_first["default_enabled"], json!(false));
         assert_eq!(recent_refresh["default_enabled"], json!(false));

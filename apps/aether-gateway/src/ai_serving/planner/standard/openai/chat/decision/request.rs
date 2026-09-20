@@ -2183,7 +2183,7 @@ mod tests {
             client_surface: None,
             gateway_credential_carrier: None,
             client_session_affinity: None,
-            codex_fingerprint_context: None,
+            provider_outbound_context: None,
             routing_policy: None,
             routing_trace_seed: None,
             routing_context: None,
@@ -2763,7 +2763,7 @@ mod tests {
             payload.provider_request_body["userAgent"],
             "vscode/1.X.X (Antigravity/4.3.0)"
         );
-        assert_eq!(payload.provider_request_body["requestType"], "agent");
+        assert!(payload.provider_request_body.get("requestType").is_none());
         assert!(payload.provider_request_body.get("contents").is_none());
         assert!(payload.provider_request_body["request"]
             .get("contents")

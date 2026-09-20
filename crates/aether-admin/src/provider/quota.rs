@@ -3341,54 +3341,24 @@ pub fn codex_structured_invalid_reason(status_code: u16, upstream_message: Optio
         return format!("{OAUTH_ACCOUNT_BLOCK_PREFIX}工作区已停用 (deactivated_workspace)");
     }
     if codex_looks_like_account_deactivated(Some(message)) {
-        let detail = if message.is_empty() {
-            "OpenAI 账号已停用"
-        } else {
-            message
-        };
-        return format!("{OAUTH_ACCOUNT_BLOCK_PREFIX}{detail}");
+        return format!("{OAUTH_ACCOUNT_BLOCK_PREFIX}OpenAI 账号已停用");
     }
     if codex_looks_like_token_invalidated(Some(message)) {
-        let detail = if message.is_empty() {
-            "Codex Token 已失效"
-        } else {
-            message
-        };
-        return format!("{OAUTH_EXPIRED_PREFIX}{detail}");
+        return format!("{OAUTH_EXPIRED_PREFIX}Codex Token 已失效");
     }
     if codex_looks_like_token_expired(Some(message)) {
-        let detail = if message.is_empty() {
-            "Codex Token 已过期"
-        } else {
-            message
-        };
-        return format!("{OAUTH_EXPIRED_PREFIX}{detail}");
+        return format!("{OAUTH_EXPIRED_PREFIX}Codex Token 已过期");
     }
     if status_code == 401 {
-        let detail = if message.is_empty() {
-            "Codex Token 已过期 (401)"
-        } else {
-            message
-        };
-        return format!("{OAUTH_EXPIRED_PREFIX}{detail}");
+        return format!("{OAUTH_EXPIRED_PREFIX}Codex Token 已过期 (401)");
     }
     if status_code == 403 {
-        let detail = if message.is_empty() {
-            "Codex 账户访问受限 (403)"
-        } else {
-            message
-        };
-        return format!("{OAUTH_ACCOUNT_BLOCK_PREFIX}{detail}");
+        return format!("{OAUTH_ACCOUNT_BLOCK_PREFIX}Codex 账户访问受限 (403)");
     }
     if status_code == 402 {
-        let detail = if message.is_empty() {
-            "Codex 账户需要付款 (402)"
-        } else {
-            message
-        };
-        return format!("{OAUTH_ACCOUNT_BLOCK_PREFIX}{detail}");
+        return format!("{OAUTH_ACCOUNT_BLOCK_PREFIX}Codex 账户需要付款 (402)");
     }
-    message.to_string()
+    format!("Codex 请求失败 ({status_code})")
 }
 
 pub fn codex_runtime_invalid_reason(
@@ -3412,11 +3382,8 @@ pub fn codex_runtime_invalid_reason(
 }
 
 fn codex_generic_forbidden_runtime_invalid_reason(upstream_message: Option<&str>) -> String {
-    let detail = upstream_message
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|message| format!("Codex Token 已失效 (403): {message}"))
-        .unwrap_or_else(|| "Codex Token 已失效 (403)".to_string());
+    let _ = upstream_message;
+    let detail = "Codex Token 已失效 (403)";
     format!("{OAUTH_EXPIRED_PREFIX}{detail}")
 }
 
@@ -3424,11 +3391,8 @@ pub fn codex_soft_request_failure_reason(
     status_code: u16,
     upstream_message: Option<&str>,
 ) -> String {
-    let detail = upstream_message
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("Codex 请求失败 ({status_code})"));
+    let _ = upstream_message;
+    let detail = format!("Codex 请求失败 ({status_code})");
     format!("{OAUTH_REQUEST_FAILED_PREFIX}{detail}")
 }
 
@@ -3580,6 +3544,258 @@ pub fn parse_kiro_usage_response(
     }
 
     Some(serde_json::Value::Object(result))
+}
+
+pub fn parse_xai_billing_response(
+    value: &serde_json::Value,
+    updated_at_unix_secs: u64,
+) -> Option<serde_json::Value> {
+    let root = value.as_object()?;
+    let config = root
+        .get("config")
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or(root);
+
+    let usage_percentage = coerce_json_f64_from_map(config, "creditUsagePercent")
+        .or_else(|| extract_xai_product_usage_percent(config));
+    let period = config.get("currentPeriod");
+    let period_type = period
+        .and_then(|value| value.get("type").or_else(|| value.get("periodType")))
+        .and_then(normalize_xai_period_type);
+    let next_reset_at = period
+        .and_then(|value| value.get("end"))
+        .and_then(parse_xai_timestamp)
+        .or_else(|| config.get("billingPeriodEnd").and_then(parse_xai_timestamp));
+    let monthly_limit =
+        coerce_xai_cents_dollars(config.get("monthlyLimit")).filter(|value| *value > 0.0);
+    let current_usage = if monthly_limit.is_some() {
+        coerce_xai_cents_dollars(config.get("used"))
+    } else {
+        None
+    };
+    let remaining = monthly_limit
+        .zip(current_usage)
+        .map(|(limit, used)| (limit - used).max(0.0));
+    let usage_percentage = usage_percentage.or_else(|| {
+        monthly_limit
+            .zip(current_usage)
+            .map(|(limit, used)| ((used / limit) * 100.0).clamp(0.0, 100.0))
+    });
+    let usage_percentage = match usage_percentage {
+        Some(value) => Some(value.clamp(0.0, 100.0)),
+        None if period_type.is_some() || next_reset_at.is_some() => Some(0.0),
+        None => None,
+    };
+    let prepaid_balance = coerce_xai_cents_dollars(config.get("prepaidBalance"));
+    let on_demand_cap = coerce_xai_cents_dollars(config.get("onDemandCap"));
+    let on_demand_used = coerce_xai_cents_dollars(config.get("onDemandUsed"));
+    let on_demand_enabled = coerce_json_bool_from_map(root, "onDemandEnabled")
+        .or_else(|| coerce_json_bool_from_map(config, "onDemandEnabled"));
+    let subscription_title = first_json_string_by_paths(
+        value,
+        &[
+            &["subscriptionTier"],
+            &["subscription_tier"],
+            &["config", "subscriptionTier"],
+            &["config", "subscription_title"],
+        ],
+    );
+
+    if usage_percentage.is_none()
+        && monthly_limit.is_none()
+        && current_usage.is_none()
+        && prepaid_balance.is_none()
+        && on_demand_cap.is_none()
+        && next_reset_at.is_none()
+        && subscription_title.is_none()
+    {
+        return None;
+    }
+
+    let mut result = serde_json::Map::new();
+    result.insert("updated_at".to_string(), json!(updated_at_unix_secs));
+    if let Some(value) = usage_percentage {
+        result.insert("usage_percentage".to_string(), json!(value));
+    }
+    if let Some(value) = monthly_limit {
+        result.insert("usage_limit".to_string(), json!(value));
+    }
+    if let Some(value) = current_usage {
+        result.insert("current_usage".to_string(), json!(value));
+    }
+    if let Some(value) = remaining {
+        result.insert("remaining".to_string(), json!(value));
+    }
+    if let Some(value) = next_reset_at {
+        result.insert("next_reset_at".to_string(), json!(value));
+    }
+    if let Some(value) = period_type {
+        result.insert("period_type".to_string(), json!(value));
+    }
+    if let Some(value) = prepaid_balance {
+        result.insert("prepaid_balance".to_string(), json!(value));
+    }
+    if let Some(value) = on_demand_cap {
+        result.insert("on_demand_cap".to_string(), json!(value));
+    }
+    if let Some(value) = on_demand_used {
+        result.insert("on_demand_used".to_string(), json!(value));
+    }
+    if let Some(value) = on_demand_enabled {
+        result.insert("on_demand_enabled".to_string(), json!(value));
+    }
+    if let Some(value) = subscription_title {
+        result.insert("subscription_title".to_string(), json!(value));
+    }
+    Some(serde_json::Value::Object(result))
+}
+
+fn coerce_json_f64_from_map(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<f64> {
+    object.get(key).and_then(coerce_json_f64)
+}
+
+fn coerce_json_bool_from_map(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<bool> {
+    object.get(key).and_then(coerce_json_bool)
+}
+
+fn extract_xai_product_usage_percent(
+    config: &serde_json::Map<String, serde_json::Value>,
+) -> Option<f64> {
+    let items = config.get("productUsage")?.as_array()?;
+    let grok_build = items.iter().find(|item| {
+        item.get("product")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|product| product.eq_ignore_ascii_case("GrokBuild"))
+    });
+    grok_build
+        .or(items.first())
+        .and_then(|item| item.get("usagePercent").and_then(coerce_json_f64))
+}
+
+fn coerce_xai_cents_dollars(value: Option<&serde_json::Value>) -> Option<f64> {
+    let value = value?;
+    let cents = match value {
+        serde_json::Value::Object(object) => object.get("val").and_then(coerce_json_f64)?,
+        other => coerce_json_f64(other)?,
+    };
+    Some(cents / 100.0)
+}
+
+fn normalize_xai_period_type(value: &serde_json::Value) -> Option<String> {
+    let raw = value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let lowered = raw.to_ascii_lowercase();
+    if lowered.contains("week") {
+        Some("weekly".to_string())
+    } else if lowered.contains("month") {
+        Some("monthly".to_string())
+    } else {
+        Some(raw.to_string())
+    }
+}
+
+fn parse_xai_timestamp(value: &serde_json::Value) -> Option<u64> {
+    if let Some(value) = coerce_json_u64(value) {
+        return Some(if value > 1_000_000_000_000 {
+            value / 1000
+        } else {
+            value
+        });
+    }
+    let raw = value.as_str()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .and_then(|timestamp| u64::try_from(timestamp.timestamp()).ok())
+}
+
+#[cfg(test)]
+mod xai_quota_tests {
+    use super::parse_xai_billing_response;
+    use serde_json::json;
+
+    #[test]
+    fn parse_xai_credits_percent_and_weekly_period() {
+        let metadata = parse_xai_billing_response(
+            &json!({
+                "config": {
+                    "currentPeriod": {
+                        "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                        "start": "2026-08-08T01:53:09.930537+00:00",
+                        "end": "2026-08-15T01:53:09.930537+00:00"
+                    },
+                    "creditUsagePercent": 46.0,
+                    "productUsage": [
+                        {"product": "GrokBuild", "usagePercent": 41.0},
+                        {"product": "GrokChat"}
+                    ],
+                    "onDemandCap": {"val": 0},
+                    "onDemandUsed": {"val": 0},
+                    "prepaidBalance": {"val": 0}
+                },
+                "subscriptionTier": "SuperGrok"
+            }),
+            1_775_000_000,
+        )
+        .expect("credits payload should parse");
+
+        assert_eq!(metadata["usage_percentage"], json!(46.0));
+        assert_eq!(metadata["period_type"], json!("weekly"));
+        assert_eq!(metadata["next_reset_at"], json!(1_786_758_789u64));
+        assert_eq!(metadata["prepaid_balance"], json!(0.0));
+        assert_eq!(metadata["on_demand_cap"], json!(0.0));
+        assert_eq!(metadata["subscription_title"], json!("SuperGrok"));
+    }
+
+    #[test]
+    fn parse_xai_omitted_percent_as_fresh_weekly_zero() {
+        let metadata = parse_xai_billing_response(
+            &json!({
+                "config": {
+                    "currentPeriod": {
+                        "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                        "end": "2026-08-15T01:53:09.930537+00:00"
+                    },
+                    "isUnifiedBillingUser": true
+                }
+            }),
+            1_775_000_000,
+        )
+        .expect("fresh weekly period should parse");
+
+        assert_eq!(metadata["usage_percentage"], json!(0.0));
+        assert_eq!(metadata["period_type"], json!("weekly"));
+    }
+
+    #[test]
+    fn parse_xai_legacy_monthly_cents() {
+        let metadata = parse_xai_billing_response(
+            &json!({
+                "config": {
+                    "monthlyLimit": {"val": 2500},
+                    "used": {"val": 1000},
+                    "billingPeriodEnd": "2026-09-01T00:00:00Z"
+                }
+            }),
+            1_775_000_000,
+        )
+        .expect("legacy monthly payload should parse");
+
+        assert_eq!(metadata["usage_limit"], json!(25.0));
+        assert_eq!(metadata["current_usage"], json!(10.0));
+        assert_eq!(metadata["remaining"], json!(15.0));
+        assert_eq!(metadata["usage_percentage"], json!(40.0));
+    }
 }
 
 pub fn parse_windsurf_user_status_response(
@@ -3741,33 +3957,21 @@ pub fn parse_windsurf_user_status_response(
             result.insert(target.to_string(), json!(found));
         }
     }
-    for (target, aliases) in [
+    for (status_field, reason_field, fixed_reason) in [
+        ("banned", "ban_reason", "Windsurf account is suspended"),
         (
-            "ban_reason",
-            &[
-                "banReason",
-                "ban_reason",
-                "blockedReason",
-                "blocked_reason",
-                "reason",
-                "message",
-            ][..],
-        ),
-        (
+            "quarantined",
             "quarantine_reason",
-            &["quarantineReason", "quarantine_reason", "reason", "message"][..],
+            "Windsurf account is quarantined",
         ),
         (
+            "is_forbidden",
             "forbidden_reason",
-            &["forbiddenReason", "forbidden_reason", "reason", "message"][..],
+            "Windsurf account access is restricted",
         ),
     ] {
-        if let Some(found) = status_sources.iter().find_map(|source| {
-            aliases
-                .iter()
-                .find_map(|alias| coerce_json_string(source.get(*alias)))
-        }) {
-            result.insert(target.to_string(), json!(found));
+        if result.get(status_field).and_then(coerce_json_bool) == Some(true) {
+            result.insert(reason_field.to_string(), json!(fixed_reason));
         }
     }
 
@@ -3953,20 +4157,19 @@ fn normalize_chatgpt_web_numeric_reset(value: f64, observed_at: u64) -> Option<u
 }
 
 fn chatgpt_web_blocked_features(value: &serde_json::Value) -> Vec<String> {
-    value
+    let image_blocked = value
         .get("blocked_features")
         .or_else(|| value.get("blockedFeatures"))
         .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .any(chatgpt_web_is_image_quota_feature);
+    if image_blocked {
+        vec!["image_generation".to_string()]
+    } else {
+        Vec::new()
+    }
 }
 
 pub fn parse_chatgpt_web_conversation_init_response(
@@ -4016,11 +4219,9 @@ pub fn parse_chatgpt_web_conversation_init_response(
             json!(plan_type.to_ascii_lowercase()),
         );
     }
-    result.insert("blocked_features".to_string(), json!(blocked_features));
-    result.insert(
-        "limits_progress".to_string(),
-        serde_json::Value::Array(limits_progress),
-    );
+    if !blocked_features.is_empty() {
+        result.insert("blocked_features".to_string(), json!(blocked_features));
+    }
 
     if image_blocked {
         result.insert("image_quota_blocked".to_string(), json!(true));
@@ -4092,13 +4293,6 @@ pub fn parse_chatgpt_web_conversation_init_response(
         }
         if let Some(reset_at) = reset_at {
             result.insert("image_quota_reset_at".to_string(), json!(reset_at));
-        }
-        if let Some(reset_after) = coerce_json_string(
-            image_limit
-                .get("reset_after")
-                .or_else(|| image_limit.get("resetAfter")),
-        ) {
-            result.insert("image_quota_reset_after".to_string(), json!(reset_after));
         }
     } else if image_blocked {
         result.insert("image_quota_remaining".to_string(), json!(0.0));
@@ -5895,7 +6089,7 @@ mod tests {
     fn codex_runtime_invalid_reason_marks_401_as_expired() {
         assert_eq!(
             codex_runtime_invalid_reason(401, Some("session expired")),
-            Some(format!("{OAUTH_EXPIRED_PREFIX}session expired"))
+            Some(format!("{OAUTH_EXPIRED_PREFIX}Codex Token 已过期"))
         );
     }
 
@@ -5903,9 +6097,7 @@ mod tests {
     fn codex_runtime_invalid_reason_marks_account_deactivated_403() {
         assert_eq!(
             codex_runtime_invalid_reason(403, Some("account has been deactivated")),
-            Some(format!(
-                "{OAUTH_ACCOUNT_BLOCK_PREFIX}account has been deactivated"
-            ))
+            Some(format!("{OAUTH_ACCOUNT_BLOCK_PREFIX}OpenAI 账号已停用"))
         );
     }
 
@@ -5913,18 +6105,14 @@ mod tests {
     fn codex_runtime_invalid_reason_marks_inactive_pat_owner_403_as_token_invalid() {
         assert_eq!(
             codex_runtime_invalid_reason(403, Some("Personal access token owner is inactive.")),
-            Some(format!(
-                "{OAUTH_EXPIRED_PREFIX}Personal access token owner is inactive."
-            ))
+            Some(format!("{OAUTH_EXPIRED_PREFIX}Codex Token 已失效"))
         );
         assert_eq!(
             codex_runtime_invalid_reason(
                 403,
                 Some("biscuit_baker_service_auth_credential_error_status")
             ),
-            Some(format!(
-                "{OAUTH_EXPIRED_PREFIX}biscuit_baker_service_auth_credential_error_status"
-            ))
+            Some(format!("{OAUTH_EXPIRED_PREFIX}Codex Token 已失效"))
         );
     }
 
@@ -5932,9 +6120,7 @@ mod tests {
     fn codex_runtime_invalid_reason_marks_deleted_agent_runtime_as_invalid() {
         assert_eq!(
             codex_runtime_invalid_reason(403, Some("Agent runtime has been deleted.")),
-            Some(format!(
-                "{OAUTH_EXPIRED_PREFIX}Agent runtime has been deleted."
-            ))
+            Some(format!("{OAUTH_EXPIRED_PREFIX}Codex Token 已失效"))
         );
     }
 
@@ -5942,7 +6128,9 @@ mod tests {
     fn codex_runtime_invalid_reason_marks_402_as_account_blocked() {
         assert_eq!(
             codex_runtime_invalid_reason(402, Some("payment required")),
-            Some(format!("{OAUTH_ACCOUNT_BLOCK_PREFIX}payment required"))
+            Some(format!(
+                "{OAUTH_ACCOUNT_BLOCK_PREFIX}Codex 账户需要付款 (402)"
+            ))
         );
     }
 
@@ -5950,10 +6138,24 @@ mod tests {
     fn codex_runtime_invalid_reason_marks_generic_403_as_token_invalid() {
         assert_eq!(
             codex_runtime_invalid_reason(403, Some("forbidden")),
-            Some(format!(
-                "{OAUTH_EXPIRED_PREFIX}Codex Token 已失效 (403): forbidden"
-            ))
+            Some(format!("{OAUTH_EXPIRED_PREFIX}Codex Token 已失效 (403)"))
         );
+    }
+
+    #[test]
+    fn codex_invalid_reason_does_not_persist_upstream_credentials() {
+        let reason = codex_runtime_invalid_reason(
+            401,
+            Some("authorization=Bearer upstream-secret https://user:pass@example.test?q=secret"),
+        )
+        .expect("401 should produce a reason");
+
+        assert_eq!(
+            reason,
+            format!("{OAUTH_EXPIRED_PREFIX}Codex Token 已过期 (401)")
+        );
+        assert!(!reason.contains("upstream-secret"));
+        assert!(!reason.contains("user:pass"));
     }
 
     #[test]
@@ -7331,9 +7533,34 @@ mod tests {
         assert_eq!(parsed.get("quarantined"), Some(&json!(true)));
         assert_eq!(
             parsed.get("quarantine_reason"),
-            Some(&json!("quota review"))
+            Some(&json!("Windsurf account is quarantined"))
         );
         assert_eq!(parsed.get("updated_at"), Some(&json!(1_770_000_000u64)));
+    }
+
+    #[test]
+    fn windsurf_status_parser_never_persists_upstream_reason_or_message() {
+        let parsed = parse_windsurf_user_status_response(
+            &json!({
+                "userStatus": {
+                    "isBanned": true,
+                    "reason": "Authorization: Bearer upstream-secret",
+                    "message": "https://user:password@internal.test?q=secret",
+                    "planStatus": {"dailyQuotaRemainingPercent": 10}
+                }
+            }),
+            1_770_000_000,
+        )
+        .expect("windsurf status should parse");
+
+        assert_eq!(
+            parsed.get("ban_reason"),
+            Some(&json!("Windsurf account is suspended"))
+        );
+        let serialized = parsed.to_string();
+        assert!(!serialized.contains("upstream-secret"));
+        assert!(!serialized.contains("user:password"));
+        assert!(!serialized.contains("q=secret"));
     }
 
     #[test]
@@ -7424,7 +7651,11 @@ mod tests {
     fn parses_chatgpt_web_blocked_image_feature_as_zero_remaining() {
         let parsed = parse_chatgpt_web_conversation_init_response(
             &json!({
-                "blocked_features": ["image_generation"],
+                "blocked_features": [
+                    "image_generation",
+                    "Authorization: Bearer upstream-secret",
+                    "https://user:password@internal.test?q=secret"
+                ],
                 "limits_progress": []
             }),
             1_778_067_246,
@@ -7433,5 +7664,43 @@ mod tests {
 
         assert_eq!(parsed.get("image_quota_blocked"), Some(&json!(true)));
         assert_eq!(parsed.get("image_quota_remaining"), Some(&json!(0.0)));
+        assert_eq!(
+            parsed.get("blocked_features"),
+            Some(&json!(["image_generation"]))
+        );
+        assert!(parsed.get("limits_progress").is_none());
+        assert!(!parsed.to_string().contains("upstream-secret"));
+    }
+
+    #[test]
+    fn chatgpt_web_parser_projects_image_limit_scalars_only() {
+        let parsed = parse_chatgpt_web_conversation_init_response(
+            &json!({
+                "limits_progress": [{
+                    "feature_name": "image_gen",
+                    "remaining": 8,
+                    "total": 12,
+                    "reset_after": "60",
+                    "message": "Authorization: Bearer upstream-secret",
+                    "nested": {
+                        "url": "https://user:password@internal.test?q=secret"
+                    }
+                }]
+            }),
+            1_778_067_246,
+        )
+        .expect("image quota should parse");
+
+        assert_eq!(parsed.get("image_quota_remaining"), Some(&json!(8.0)));
+        assert_eq!(parsed.get("image_quota_total"), Some(&json!(12.0)));
+        assert_eq!(
+            parsed.get("image_quota_reset_at"),
+            Some(&json!(1_778_067_306u64))
+        );
+        assert!(parsed.get("limits_progress").is_none());
+        assert!(parsed.get("image_quota_reset_after").is_none());
+        let serialized = parsed.to_string();
+        assert!(!serialized.contains("upstream-secret"));
+        assert!(!serialized.contains("user:password"));
     }
 }

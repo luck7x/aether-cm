@@ -16,13 +16,13 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub(super) struct AdminProviderOAuthBatchImportRequest {
     pub credentials: String,
     pub proxy_node_id: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(super) struct AdminProviderOAuthBatchImportEntry {
     pub parse_error: Option<String>,
     pub refresh_token: Option<String>,
@@ -52,7 +52,7 @@ pub(super) struct AdminProviderOAuthBatchImportEntry {
     pub rate_limit_tier: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(super) struct AdminProviderOAuthBatchImportOutcome {
     pub total: usize,
     pub success: usize,
@@ -214,7 +214,12 @@ fn extract_admin_provider_oauth_batch_import_entry(
             } else {
                 let sso_from_cookie = grok_cookie_session_token(provider_type, raw_token);
                 let token_input = sso_from_cookie.as_deref().unwrap_or(raw_token);
-                let (refresh_token, access_token) = import_tokens_from_raw_token(token_input);
+                let (refresh_token, access_token) =
+                    if provider_type.trim().eq_ignore_ascii_case("xai") {
+                        (None, Some(token_input.to_string()))
+                    } else {
+                        import_tokens_from_raw_token(token_input)
+                    };
                 let (refresh_token, access_token) = normalize_provider_import_tokens(
                     provider_type,
                     refresh_token.as_deref(),
@@ -262,6 +267,7 @@ fn extract_admin_provider_oauth_batch_import_entry(
             let object = normalized_claude_object.as_ref().unwrap_or(object);
             let is_grok = provider_type.trim().eq_ignore_ascii_case("grok");
             let is_windsurf = provider_type.trim().eq_ignore_ascii_case("windsurf");
+            let is_xai = provider_type.trim().eq_ignore_ascii_case("xai");
             let is_codex_agent_identity = provider_type.trim().eq_ignore_ascii_case("codex")
                 && aether_provider_transport::is_codex_agent_identity_auth_config_value(item);
             if is_codex_agent_identity {
@@ -336,14 +342,6 @@ fn extract_admin_provider_oauth_batch_import_entry(
             } else {
                 None
             };
-            let (refresh_token, access_token) = normalize_provider_import_tokens(
-                provider_type,
-                refresh_token.as_deref(),
-                access_token
-                    .as_deref()
-                    .or(session_token.as_deref())
-                    .or(header_bearer_token.as_deref()),
-            );
             let windsurf_api_key = is_windsurf
                 .then(|| {
                     coerce_admin_provider_oauth_import_str(
@@ -351,6 +349,22 @@ fn extract_admin_provider_oauth_batch_import_entry(
                     )
                 })
                 .flatten();
+            let xai_api_key = is_xai
+                .then(|| {
+                    coerce_admin_provider_oauth_import_str(
+                        object.get("api_key").or_else(|| object.get("apiKey")),
+                    )
+                })
+                .flatten();
+            let (refresh_token, access_token) = normalize_provider_import_tokens(
+                provider_type,
+                refresh_token.as_deref(),
+                access_token
+                    .as_deref()
+                    .or(session_token.as_deref())
+                    .or(header_bearer_token.as_deref())
+                    .or(xai_api_key.as_deref()),
+            );
             let windsurf_token = is_windsurf
                 .then(|| {
                     coerce_admin_provider_oauth_import_str(
@@ -663,7 +677,7 @@ pub(super) fn parse_admin_provider_oauth_batch_import_entries(
                     .collect();
             }
             Ok(_) => {}
-            Err(error) => return vec![parse_error_entry(format!("JSON 数组解析失败: {error}"))],
+            Err(_) => return vec![parse_error_entry("JSON 数组解析失败".to_string())],
         }
     }
 
@@ -697,8 +711,8 @@ pub(super) fn parse_admin_provider_oauth_batch_import_entries(
                             "JSON 行必须是账号对象，不能作为 raw token 导入".to_string(),
                         ));
                     }
-                    Err(error) => {
-                        return Some(parse_error_entry(format!("JSON 行解析失败: {error}")));
+                    Err(_) => {
+                        return Some(parse_error_entry("JSON 行解析失败".to_string()));
                     }
                 }
             }
@@ -719,7 +733,7 @@ pub(super) fn parse_admin_provider_oauth_agent_identity_import_entries(
         return Err("Agent Identity 凭据不能为空".to_string());
     }
     let value = serde_json::from_str::<serde_json::Value>(raw)
-        .map_err(|error| format!("Agent Identity JSON 解析失败: {error}"))?;
+        .map_err(|_| "Agent Identity JSON 解析失败".to_string())?;
     let entries = match &value {
         serde_json::Value::Array(items) => items
             .iter()
@@ -940,23 +954,7 @@ pub(super) async fn extract_admin_provider_oauth_batch_error_detail(
     response: Response<Body>,
 ) -> String {
     let status = response.status();
-    let raw_body = to_bytes(response.into_body(), crate::MAX_ERROR_BODY_BYTES)
-        .await
-        .ok();
-    if let Some(raw_body) = raw_body {
-        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw_body) {
-            if let Some(detail) = value.get("detail").and_then(serde_json::Value::as_str) {
-                let normalized = detail.trim();
-                if !normalized.is_empty() {
-                    return normalized.to_string();
-                }
-            }
-        }
-        let normalized = String::from_utf8_lossy(&raw_body).trim().to_string();
-        if !normalized.is_empty() {
-            return normalized;
-        }
-    }
+    let _ = to_bytes(response.into_body(), crate::MAX_ERROR_BODY_BYTES).await;
     format!("HTTP {}", status.as_u16())
 }
 
@@ -1479,7 +1477,7 @@ mod tests {
                 &auth_config,
                 Some(0),
             ),
-            "antigravity_anti@example.com"
+            "anti@example.com"
         );
     }
 
@@ -1592,5 +1590,24 @@ mod tests {
         assert!(entries[1].refresh_token.is_none());
         assert!(entries[1].access_token.is_none());
         assert!(entries[1].raw_credentials.is_none());
+    }
+
+    #[test]
+    fn parses_xai_api_key_json_and_raw_lines_as_access_token() {
+        let entries = parse_admin_provider_oauth_batch_import_entries(
+            "xai",
+            r#"{"api_key":"xai-api-key","email":"a@x.ai"}
+{"refresh_token":"xai-refresh"}
+xai-raw-api-key"#,
+        );
+
+        assert_eq!(entries.len(), 3);
+        assert!(entries[0].refresh_token.is_none());
+        assert_eq!(entries[0].access_token.as_deref(), Some("xai-api-key"));
+        assert_eq!(entries[0].email.as_deref(), Some("a@x.ai"));
+        assert_eq!(entries[1].refresh_token.as_deref(), Some("xai-refresh"));
+        assert!(entries[1].access_token.is_none());
+        assert!(entries[2].refresh_token.is_none());
+        assert_eq!(entries[2].access_token.as_deref(), Some("xai-raw-api-key"));
     }
 }

@@ -129,7 +129,7 @@
                         <ProviderKeyIdentityBlock
                           :api-key="key"
                           :masked-secret-label="getProviderMaskedSecretLabel(key, provider.provider_type)"
-                          :oauth-plan-label="key.oauth_plan_type ? formatOAuthPlanType(key.oauth_plan_type) : null"
+                          :oauth-plan-label="key.oauth_plan_type ? formatOAuthPlanType(key.oauth_plan_type ?? '') : null"
                           :oauth-plan-class="key.oauth_plan_type ? getOAuthPlanTypeClass(key.oauth_plan_type) : ''"
                           :oauth-org-badge="getOAuthOrgBadge(key)"
                           :kiro-subscription-label="shouldShowKiroSubscriptionBadge(key) ? getKiroSubscriptionBadgeLabel(key) : null"
@@ -153,7 +153,7 @@
                       </div>
                       <ProviderKeyActionCluster
                         :api-key="key"
-                        :provider-type="provider.provider_type"
+                        :provider-type="provider.provider_type ?? null"
                         :recoverable="isKeyRecoverable(key)"
                         :recover-title="getRecoverKeyTitle(key)"
                         :circuit-breaker-title="getKeyCircuitBreakerTitle(key)"
@@ -161,7 +161,7 @@
                         :health-score-bar-class="getHealthScoreBarColor(key.health_score || 0)"
                         :health-score-text-class="getHealthScoreColor(key.health_score || 0)"
                         :proxy-popover-open="proxyPopoverOpenKeyId === key.id"
-                        :proxy-node-name="getKeyProxyNodeName(key)"
+                        :proxy-node-name="getKeyProxyNodeName(key) ?? undefined"
                         :saving-proxy="savingProxyKeyId === key.id"
                         :toggling="togglingKeyId === key.id"
                         @recover="handleRecoverKey(key)"
@@ -514,6 +514,65 @@
                         </div>
                       </template>
                     </div>
+                    <!-- xAI / Grok Build 订阅额度 -->
+                    <div
+                      v-if="provider.provider_type === 'xai' && hasXaiQuotaDisplayData(key)"
+                      class="mt-2 p-2 rounded-md bg-muted/30"
+                    >
+                      <ProviderQuotaSectionHeader
+                        :title="legacyT('账号配额')"
+                        :loading="refreshingQuota"
+                        :updated-text="getXaiQuotaDisplay(key)?.updated_at ? formatKiroUpdatedAt(getXaiQuotaDisplay(key)?.updated_at || 0) : null"
+                      />
+                      <div class="space-y-2">
+                        <ProviderQuotaProgressRow
+                          v-if="getXaiQuotaDisplay(key)?.usage_percentage !== undefined || getXaiQuotaDisplay(key)?.remaining_percentage !== undefined"
+                          :label="legacyT(getXaiUsageLabel(key))"
+                          :used-percent="getXaiUsedPercent(key)"
+                          :remaining-percent="getXaiRemainingPercent(key)"
+                          :meter-class="getQuotaRemainingClass(getXaiUsedPercent(key))"
+                          :bar-class="getQuotaRemainingBarColor(getXaiUsedPercent(key))"
+                          :reset-text="getXaiQuotaDisplay(key)?.next_reset_at
+                            ? `${formatKiroResetTime(getXaiQuotaDisplay(key)?.next_reset_at)}${legacyT('重置')}`
+                            : null"
+                        >
+                          <template
+                            v-if="getXaiQuotaDisplay(key)?.usage_limit != null"
+                            #footer
+                          >
+                            <div class="flex items-center justify-between text-[9px] text-muted-foreground/70 mt-0.5">
+                              <span>
+                                {{ formatKiroUsage(getXaiQuotaDisplay(key)?.current_usage) }} /
+                                {{ formatKiroUsage(getXaiQuotaDisplay(key)?.usage_limit) }}
+                              </span>
+                              <span v-if="getXaiQuotaDisplay(key)?.next_reset_at">
+                                {{ formatKiroResetTime(getXaiQuotaDisplay(key)?.next_reset_at) }}{{ legacyT('重置') }}
+                              </span>
+                            </div>
+                          </template>
+                        </ProviderQuotaProgressRow>
+                        <div
+                          v-if="getXaiQuotaDisplay(key)?.prepaid_balance != null"
+                          class="text-[10px] text-muted-foreground"
+                        >
+                          {{ legacyT('预付额度') }}: {{ formatKiroUsage(getXaiQuotaDisplay(key)?.prepaid_balance) }}
+                        </div>
+                        <ProviderQuotaProgressRow
+                          v-if="getXaiQuotaDisplay(key)?.on_demand_cap"
+                          :label="legacyT('按需额度')"
+                          :used-percent="getXaiOnDemandUsedPercent(key)"
+                          :meter-class="getQuotaRemainingClass(getXaiOnDemandUsedPercent(key))"
+                          :bar-class="getQuotaRemainingBarColor(getXaiOnDemandUsedPercent(key))"
+                        >
+                          <template #footer>
+                            <div class="text-[9px] text-muted-foreground/70 mt-0.5">
+                              {{ formatKiroUsage(getXaiQuotaDisplay(key)?.on_demand_used) }} /
+                              {{ formatKiroUsage(getXaiQuotaDisplay(key)?.on_demand_cap) }}
+                            </div>
+                          </template>
+                        </ProviderQuotaProgressRow>
+                      </div>
+                    </div>
                     <!-- Windsurf 上游额度信息 -->
                     <div
                       v-if="provider.provider_type === 'windsurf' && (hasWindsurfQuotaDisplayData(key) || isWindsurfUnavailableKey(key) || isWindsurfExhaustedKey(key))"
@@ -731,7 +790,7 @@
                     v-if="shouldPaginateKeys"
                     class="px-4 py-2 flex items-center justify-between text-xs text-muted-foreground mt-auto"
                   >
-                    <span>{{ legacyT('共') }} {{ allKeys.length }} {{ legacyT('个') }}{{ legacyT(isKeyManagedProviderType(provider.provider_type) ? '密钥' : '账号') }}</span>
+                    <span>{{ legacyT('共') }} {{ providerKeysTotal }} {{ legacyT('个') }}{{ legacyT(isKeyManagedProviderType(provider.provider_type) ? '密钥' : '账号') }}</span>
                     <div class="flex items-center gap-1.5">
                       <Button
                         variant="ghost"
@@ -847,7 +906,7 @@
     v-if="open && oauthAccountDialogOpen && provider"
     :open="oauthAccountDialogOpen"
     :provider-id="provider.id"
-    :provider-type="provider.provider_type"
+    :provider-type="provider.provider_type ?? null"
     @close="oauthAccountDialogOpen = false"
     @saved="handleKeyChanged"
   />
@@ -910,10 +969,10 @@
   <AntigravityQuotaDialog
     v-if="antigravityQuotaDialogKey"
     :open="antigravityQuotaDialogOpen"
-    :metadata="antigravityQuotaDialogKey.upstream_metadata"
+    :metadata="antigravityQuotaDialogKey.upstream_metadata ?? null"
     :quota-snapshot="antigravityQuotaDialogKey.status_snapshot?.quota ?? null"
     :key-name="antigravityQuotaDialogKey.name || legacyT('未命名密钥')"
-    :provider-id="providerId"
+    :provider-id="providerId ?? undefined"
     :key-id="antigravityQuotaDialogKey.id"
     @update:open="antigravityQuotaDialogOpen = $event"
   />
@@ -940,7 +999,7 @@ import {
 } from 'lucide-vue-next'
 import { parseApiError } from '@/utils/errorParser'
 import { useEscapeKey } from '@/composables/useEscapeKey'
-import { useI18n } from '@/i18n'
+import { getI18nLocale, useI18n } from '@/i18n'
 import Button from '@/components/ui/button.vue'
 import Card from '@/components/ui/card.vue'
 import { useToast } from '@/composables/useToast'
@@ -980,6 +1039,7 @@ import ProviderQuotaProgressRow from '@/features/providers/components/ProviderQu
 import ProviderQuotaSectionHeader from '@/features/providers/components/ProviderQuotaSectionHeader.vue'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
 import { resolveAntigravityQuotaGroupLabel } from '@/features/providers/utils/antigravityQuota'
+import { refreshQuotaInBackground } from '@/features/providers/utils/refreshQuotaInBackground'
 import {
   deleteEndpointKey,
   recoverKeyHealth,
@@ -1004,6 +1064,7 @@ import type {
   GrokUpstreamMetadata,
   KiroUpstreamMetadata,
   WindsurfUpstreamMetadata,
+  XaiUpstreamMetadata,
   QuotaResetCreditsSnapshot,
   QuotaStatusSnapshot,
   QuotaWindowSnapshot,
@@ -1553,7 +1614,7 @@ async function downloadRefreshToken(key: EndpointAPIKey) {
   try {
     const data = await exportKey(key.id)
     const providerType = provider.value?.provider_type || 'unknown'
-    const safeName = (data.email || key.name || key.id.slice(0, 8)).replace(/[^a-zA-Z0-9_\-@.]/g, '_')
+    const safeName = ((typeof data.email === 'string' && data.email) || key.name || key.id.slice(0, 8)).replace(/[^a-zA-Z0-9_\-@.]/g, '_')
 
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
@@ -1692,7 +1753,7 @@ async function handleClearOAuthInvalid(key: EndpointAPIKey) {
     title: legacyT('清除账号异常标记'),
     message: formatClearOAuthInvalidConfirmMessage(key),
     confirmText: legacyT('确认清除'),
-    variant: 'default',
+    variant: 'info',
   })
   if (!confirmed) return
 
@@ -1857,7 +1918,7 @@ function quotaSnapshotHasDisplayData(quota: QuotaStatusSnapshot | null | undefin
 
 function getQuotaSnapshotForProvider(
   key: EndpointAPIKey,
-  providerType: 'codex' | 'kiro' | 'windsurf' | 'antigravity' | 'chatgpt_web' | 'gemini_cli' | 'grok',
+  providerType: 'codex' | 'kiro' | 'windsurf' | 'antigravity' | 'chatgpt_web' | 'gemini_cli' | 'grok' | 'xai',
 ): QuotaStatusSnapshot | null {
   const quota = key.status_snapshot?.quota
   if (!quota) return null
@@ -2178,6 +2239,90 @@ function hasKiroQuotaDisplayData(key: EndpointAPIKey): boolean {
   return !!kiro && (kiro.usage_percentage !== undefined || kiro.usage_limit !== undefined)
 }
 
+function getXaiQuotaDisplay(key: EndpointAPIKey): XaiUpstreamMetadata | null {
+  const quota = getQuotaSnapshotForProvider(key, 'xai')
+  if (!quota) return null
+
+  const display: XaiUpstreamMetadata = {}
+  const updatedAt = getQuotaSnapshotUpdatedAt(quota)
+  if (updatedAt !== undefined) display.updated_at = updatedAt
+  if (quota.plan_type) display.subscription_title = quota.plan_type
+
+  const usageWindow =
+    getQuotaWindow(quota, 'usage')
+    ?? getQuotaWindowByScope(quota, 'account')[0]
+    ?? null
+  if (usageWindow) {
+    const usedPercent = getQuotaWindowUsedPercent(usageWindow)
+    const remainingPercent = getQuotaWindowRemainingPercent(usageWindow)
+    if (usedPercent !== undefined) display.usage_percentage = usedPercent
+    if (remainingPercent !== undefined) display.remaining_percentage = remainingPercent
+    const usageLabel = String(usageWindow.label || '').trim()
+    if (usageLabel) display.usage_label = usageLabel
+    if (typeof usageWindow.used_value === 'number') display.current_usage = usageWindow.used_value
+    if (typeof usageWindow.limit_value === 'number') display.usage_limit = usageWindow.limit_value
+    if (typeof usageWindow.remaining_value === 'number') display.remaining = usageWindow.remaining_value
+    const nextResetAt =
+      getQuotaWindowResetAt(usageWindow)
+      ?? (() => {
+        const resetSeconds = getQuotaWindowResetSeconds(usageWindow)
+        if (updatedAt === undefined || resetSeconds === undefined) return undefined
+        return updatedAt + resetSeconds
+      })()
+    if (nextResetAt !== undefined) display.next_reset_at = nextResetAt
+  }
+
+  const prepaidWindow = getQuotaWindow(quota, 'prepaid')
+  if (typeof prepaidWindow?.remaining_value === 'number') {
+    display.prepaid_balance = prepaidWindow.remaining_value
+  }
+
+  const onDemandWindow = getQuotaWindow(quota, 'on_demand')
+  if (typeof onDemandWindow?.limit_value === 'number') display.on_demand_cap = onDemandWindow.limit_value
+  if (typeof onDemandWindow?.used_value === 'number') display.on_demand_used = onDemandWindow.used_value
+  if (typeof onDemandWindow?.remaining_value === 'number') display.on_demand_remaining = onDemandWindow.remaining_value
+
+  return Object.keys(display).length > 0 ? display : null
+}
+
+function hasXaiQuotaDisplayData(key: EndpointAPIKey): boolean {
+  const xai = getXaiQuotaDisplay(key)
+  return !!xai && (
+    xai.usage_percentage !== undefined
+    || xai.remaining_percentage !== undefined
+    || xai.prepaid_balance !== undefined
+    || xai.on_demand_cap !== undefined
+  )
+}
+
+function getXaiUsageLabel(key: EndpointAPIKey): string {
+  const display = getXaiQuotaDisplay(key)
+  if (display?.usage_label) return display.usage_label
+  const title = display?.subscription_title
+  return title ? `使用额度 (${title})` : '使用额度'
+}
+
+function getXaiUsedPercent(key: EndpointAPIKey): number {
+  return Math.min(Math.max(100 - getXaiRemainingPercent(key), 0), 100)
+}
+
+function getXaiRemainingPercent(key: EndpointAPIKey): number {
+  const xai = getXaiQuotaDisplay(key)
+  if (xai?.remaining_percentage != null && Number.isFinite(xai.remaining_percentage)) {
+    return Math.min(Math.max(xai.remaining_percentage, 0), 100)
+  }
+  if (xai?.usage_percentage != null && Number.isFinite(xai.usage_percentage)) {
+    return Math.min(Math.max(100 - xai.usage_percentage, 0), 100)
+  }
+  return 0
+}
+
+function getXaiOnDemandUsedPercent(key: EndpointAPIKey): number {
+  const xai = getXaiQuotaDisplay(key)
+  if (!xai?.on_demand_cap || xai.on_demand_cap <= 0) return 0
+  return Math.max(Math.min(((xai.on_demand_used || 0) / xai.on_demand_cap) * 100, 100), 0)
+}
+
 type GrokQuotaDisplay = GrokUpstreamMetadata & {
   usage_percentage?: number
   usage_limit?: number
@@ -2473,10 +2618,10 @@ function isKiroBannedKey(key: EndpointAPIKey): boolean {
 }
 
 // 格式化封禁/禁止时间（后端返回秒级时间戳，Kiro/Antigravity 通用）
-function formatBanTimestamp(timestamp: number | undefined): string {
+function formatBanTimestamp(timestamp: number | null | undefined): string {
   if (!timestamp) return ''
   const date = new Date(timestamp * 1000)
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(getI18nLocale(), {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -2515,7 +2660,7 @@ function formatKiroUsage(value: number | undefined): string {
 }
 
 // 格式化 Kiro 重置时间
-function formatKiroResetTime(timestamp: number | undefined): string {
+function formatKiroResetTime(timestamp: number | null | undefined): string {
   if (!timestamp) return ''
   // timestamp 可能是毫秒或秒，需要判断
   const ts = timestamp > 1e12 ? timestamp : timestamp * 1000
@@ -2567,7 +2712,7 @@ function shouldShowKiroSubscriptionBadge(key: EndpointAPIKey): boolean {
   const kiroLabel = getKiroSubscriptionBadgeLabel(key)
   if (!kiroLabel) return false
 
-  const oauthPlanLabel = formatOAuthPlanType(key.oauth_plan_type)
+  const oauthPlanLabel = formatOAuthPlanType(key.oauth_plan_type ?? '')
   if (!oauthPlanLabel) return true
 
   return oauthPlanLabel.trim().toLowerCase() !== kiroLabel.trim().toLowerCase()
@@ -2687,6 +2832,28 @@ function shouldAutoRefreshGrokQuota(): boolean {
     }
 
     const updatedAt = getGrokQuotaDisplay(key)?.updated_at
+    if (typeof updatedAt !== 'number' || (now - updatedAt) > AUTO_QUOTA_REFRESH_STALE_SECONDS) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function shouldAutoRefreshXaiQuota(): boolean {
+  if (provider.value?.provider_type !== 'xai') return false
+  const now = Math.floor(Date.now() / 1000)
+
+  for (const { key } of allKeys.value) {
+    if (!key.is_active) continue
+
+    if (isTokenExpiringSoon(key, now)) return true
+
+    if (!hasXaiQuotaDisplayData(key)) {
+      return true
+    }
+
+    const updatedAt = getXaiQuotaDisplay(key)?.updated_at
     if (typeof updatedAt !== 'number' || (now - updatedAt) > AUTO_QUOTA_REFRESH_STALE_SECONDS) {
       return true
     }
@@ -2823,7 +2990,7 @@ async function autoRefreshQuotaInBackground(): Promise<boolean> {
   if (refreshingQuota.value) return false
 
   const providerType = provider.value?.provider_type
-  if (providerType !== 'codex' && providerType !== 'gemini_cli' && providerType !== 'antigravity' && providerType !== 'kiro' && providerType !== 'windsurf' && providerType !== 'chatgpt_web' && providerType !== 'grok') return false
+  if (providerType !== 'codex' && providerType !== 'gemini_cli' && providerType !== 'antigravity' && providerType !== 'kiro' && providerType !== 'windsurf' && providerType !== 'chatgpt_web' && providerType !== 'grok' && providerType !== 'xai') return false
 
   // 检查是否需要刷新
   let shouldRefresh = false
@@ -2837,6 +3004,8 @@ async function autoRefreshQuotaInBackground(): Promise<boolean> {
     shouldRefresh = shouldAutoRefreshKiroQuota()
   } else if (providerType === 'grok') {
     shouldRefresh = shouldAutoRefreshGrokQuota()
+  } else if (providerType === 'xai') {
+    shouldRefresh = shouldAutoRefreshXaiQuota()
   } else if (providerType === 'windsurf') {
     shouldRefresh = shouldAutoRefreshWindsurfQuota()
   } else if (providerType === 'chatgpt_web') {
@@ -2855,6 +3024,8 @@ async function autoRefreshQuotaInBackground(): Promise<boolean> {
     hadCachedQuota = allKeys.value.some(({ key }) => key.is_active && hasKiroQuotaDisplayData(key))
   } else if (providerType === 'grok') {
     hadCachedQuota = allKeys.value.some(({ key }) => key.is_active && hasGrokQuotaDisplayData(key))
+  } else if (providerType === 'xai') {
+    hadCachedQuota = allKeys.value.some(({ key }) => key.is_active && hasXaiQuotaDisplayData(key))
   } else if (providerType === 'windsurf') {
     hadCachedQuota = allKeys.value.some(({ key }) => key.is_active && hasWindsurfQuotaDisplayData(key))
   } else if (providerType === 'chatgpt_web') {
@@ -2862,15 +3033,21 @@ async function autoRefreshQuotaInBackground(): Promise<boolean> {
   }
 
   refreshingQuota.value = true
+  const isCurrent = () => props.open && props.providerId === providerId
   try {
-    const result = await refreshProviderQuota(providerId)
+    const result = await refreshQuotaInBackground({
+      refresh: () => refreshProviderQuota(providerId),
+      isCurrent,
+      retryInitialEmptyQuota: providerType === 'antigravity' && !hadCachedQuota,
+    })
+    if (!result) return false
     const applied = applyQuotaResults(result.results)
     if (result.success <= 0 && applied === 0 && !hadCachedQuota && providerType === 'antigravity') {
-      showError(legacyT('没有获取到配额信息（请检查账号是否已授权、project_id 是否存在）'), legacyT('提示'))
+      showWarning(legacyT('配额暂未就绪，请稍后刷新'), legacyT('提示'))
     }
     return applied > 0
   } catch (err: unknown) {
-    if (!hadCachedQuota && providerType === 'antigravity') {
+    if (isCurrent() && !hadCachedQuota && providerType === 'antigravity') {
       showError(localizedApiError(err, '后台刷新配额失败'), legacyT('错误'))
     }
     return false
@@ -2880,6 +3057,8 @@ async function autoRefreshQuotaInBackground(): Promise<boolean> {
 }
 
 async function openAntigravityQuotaDialog(key: EndpointAPIKey) {
+  const providerId = props.providerId
+  if (!providerId) return
   antigravityQuotaDialogKey.value = key
   antigravityQuotaDialogOpen.value = true
 
@@ -2888,7 +3067,8 @@ async function openAntigravityQuotaDialog(key: EndpointAPIKey) {
     if (refreshingQuota.value) return
     refreshingQuota.value = true
     try {
-      const result = await refreshProviderQuota(props.providerId)
+      const result = await refreshProviderQuota(providerId)
+      if (providerId !== props.providerId) return
       applyQuotaResults(result.results)
       // 更新弹窗引用的 key 数据
       const updated = allKeys.value.find(({ key: k }) => k.id === key.id)

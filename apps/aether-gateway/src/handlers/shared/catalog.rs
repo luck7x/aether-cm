@@ -1,4 +1,5 @@
-use crate::handlers::shared::{json_string_list, unix_secs_to_rfc3339};
+use crate::handlers::shared::{json_string_list, masked_secret_display, unix_secs_to_rfc3339};
+use crate::model_fetch::safe_model_fetch_error;
 use crate::provider_key_auth::{
     provider_key_auth_config_is_agent_identity, provider_key_auth_config_uses_header_authorization,
     provider_key_auth_semantics, provider_key_can_export_oauth, provider_key_can_refresh_oauth,
@@ -6,10 +7,17 @@ use crate::provider_key_auth::{
 };
 use crate::AppState;
 use aether_admin::provider::quota as admin_provider_quota_pure;
+use aether_admin::provider::redaction::{
+    admin_provider_oauth_invalid_reason_safe_text, admin_provider_status_snapshot_safe_json,
+    admin_provider_upstream_metadata_safe_json, admin_secret_safe_json, admin_secret_safe_proxy,
+};
 use aether_admin::provider::status as admin_provider_status_pure;
 #[cfg(test)]
 use aether_crypto::DEVELOPMENT_ENCRYPTION_KEY;
-use aether_crypto::{decrypt_python_fernet_ciphertext, encrypt_python_fernet_plaintext};
+use aether_crypto::{
+    decrypt_python_fernet_ciphertext, encrypt_python_fernet_plaintext,
+    looks_like_python_fernet_ciphertext,
+};
 use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey;
 use aether_provider_pool::{
     grok_pool_tier_from_quota_bucket, grok_supported_quota_windows_for_tier,
@@ -23,6 +31,12 @@ const OAUTH_ACCOUNT_BLOCK_PREFIX: &str = "[ACCOUNT_BLOCK] ";
 const OAUTH_EXPIRED_PREFIX: &str = "[OAUTH_EXPIRED] ";
 const OAUTH_REFRESH_FAILED_PREFIX: &str = "[REFRESH_FAILED] ";
 const OAUTH_REQUEST_FAILED_PREFIX: &str = "[REQUEST_FAILED] ";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StoredCatalogSecret {
+    Encrypted(String),
+    LegacyPlaintext(String),
+}
 
 pub(crate) fn provider_catalog_key_supports_format(
     key: &StoredProviderCatalogKey,
@@ -73,8 +87,29 @@ pub(crate) fn decrypt_catalog_secret_with_fallbacks(
     None
 }
 
+pub(crate) fn decrypt_catalog_secret_or_legacy_plaintext(
+    encryption_key: Option<&str>,
+    stored_value: &str,
+) -> Result<StoredCatalogSecret, ()> {
+    if let Some(plaintext) = decrypt_catalog_secret_with_fallbacks(encryption_key, stored_value) {
+        return Ok(StoredCatalogSecret::Encrypted(plaintext));
+    }
+    if looks_like_python_fernet_ciphertext(stored_value) {
+        return Err(());
+    }
+    Ok(StoredCatalogSecret::LegacyPlaintext(
+        stored_value.to_string(),
+    ))
+}
+
 pub(crate) fn effective_catalog_encryption_key(state: &AppState) -> Option<Cow<'_, str>> {
-    let encryption_key = state.encryption_key().map(str::trim).unwrap_or("");
+    effective_catalog_encryption_key_from_config(state.encryption_key())
+}
+
+pub(crate) fn effective_catalog_encryption_key_from_config(
+    encryption_key: Option<&str>,
+) -> Option<Cow<'_, str>> {
+    let encryption_key = encryption_key.map(str::trim).unwrap_or("");
     if !encryption_key.is_empty() {
         return Some(Cow::Borrowed(encryption_key));
     }
@@ -103,7 +138,14 @@ pub(crate) fn encrypt_catalog_secret_with_fallbacks(
     state: &AppState,
     plaintext: &str,
 ) -> Option<String> {
-    let encryption_key = effective_catalog_encryption_key(state)?;
+    encrypt_catalog_secret_with_configured_key_fallbacks(state.encryption_key(), plaintext)
+}
+
+pub(crate) fn encrypt_catalog_secret_with_configured_key_fallbacks(
+    encryption_key: Option<&str>,
+    plaintext: &str,
+) -> Option<String> {
+    let encryption_key = effective_catalog_encryption_key_from_config(encryption_key)?;
     encrypt_python_fernet_plaintext(encryption_key.as_ref(), plaintext).ok()
 }
 
@@ -151,18 +193,11 @@ pub(crate) fn masked_catalog_api_key(state: &AppState, key: &StoredProviderCatal
             else {
                 return "[未设置]".to_string();
             };
-            decrypt_catalog_secret_with_fallbacks(state.encryption_key(), ciphertext)
-                .map(|value| {
-                    if value.chars().count() <= 12 {
-                        format!("{value}***")
-                    } else {
-                        format!(
-                            "{}***{}",
-                            take_secret_prefix(&value, 8),
-                            take_secret_suffix(&value, 4)
-                        )
-                    }
-                })
+            state
+                .decrypt_provider_catalog_key_api_key(key)
+                .ok()
+                .flatten()
+                .map(|value| masked_secret_display(&value, 8, 4, "***"))
                 .unwrap_or_else(|| "***ERROR***".to_string())
         }
     }
@@ -189,7 +224,10 @@ pub(crate) fn parse_catalog_auth_config_json(
     if ciphertext.is_empty() {
         return None;
     }
-    let plaintext = decrypt_catalog_secret_with_fallbacks(state.encryption_key(), ciphertext)?;
+    let plaintext = state
+        .decrypt_provider_catalog_key_auth_config(key)
+        .ok()
+        .flatten()?;
     serde_json::from_str::<serde_json::Value>(&plaintext)
         .ok()?
         .as_object()
@@ -399,7 +437,9 @@ pub(crate) fn sync_provider_key_oauth_status_snapshot(
         "oauth".to_string(),
         build_provider_key_oauth_status_snapshot(key),
     );
-    Some(Value::Object(snapshot))
+    Some(admin_provider_status_snapshot_safe_json(Some(
+        &Value::Object(snapshot),
+    )))
 }
 
 fn build_provider_key_account_status_snapshot(
@@ -1348,6 +1388,168 @@ fn build_kiro_quota_status_snapshot(
     }))
 }
 
+fn build_xai_quota_status_snapshot(
+    upstream_metadata: Option<&Value>,
+    source: &str,
+) -> Option<Value> {
+    let metadata = provider_quota_metadata_bucket(upstream_metadata, "xai")?;
+    let observed_at_unix_secs = provider_quota_timestamp_unix_secs(metadata.get("updated_at"));
+    let usage_limit = metadata
+        .get("usage_limit")
+        .and_then(admin_provider_quota_pure::coerce_json_f64);
+    let current_usage = metadata
+        .get("current_usage")
+        .and_then(admin_provider_quota_pure::coerce_json_f64);
+    let remaining = metadata
+        .get("remaining")
+        .and_then(admin_provider_quota_pure::coerce_json_f64);
+    let usage_ratio = metadata
+        .get("usage_percentage")
+        .and_then(admin_provider_quota_pure::coerce_json_f64)
+        .map(|value| (value / 100.0).clamp(0.0, 1.0))
+        .or_else(|| {
+            current_usage
+                .zip(usage_limit)
+                .and_then(|(current_usage, usage_limit)| {
+                    (usage_limit > 0.0).then_some((current_usage / usage_limit).clamp(0.0, 1.0))
+                })
+        });
+    let remaining_ratio = usage_ratio.map(|value| (1.0 - value).max(0.0));
+    let next_reset_at = provider_quota_timestamp_unix_secs(metadata.get("next_reset_at"));
+    let reset_seconds = quota_window_reset_seconds(observed_at_unix_secs, next_reset_at);
+    let plan_type = metadata
+        .get("subscription_title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let period_type = metadata
+        .get("period_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let usage_label = match period_type.as_deref() {
+        Some("monthly") => "月额度",
+        Some("weekly") => "周额度",
+        _ => "额度",
+    };
+
+    let mut windows = Vec::new();
+    if usage_ratio.is_some()
+        || remaining.is_some()
+        || usage_limit.is_some()
+        || current_usage.is_some()
+        || next_reset_at.is_some()
+    {
+        windows.push(json!({
+            "code": "usage",
+            "label": usage_label,
+            "scope": "account",
+            "unit": if usage_limit.is_some() { "usd" } else { "percent" },
+            "used_ratio": usage_ratio,
+            "remaining_ratio": remaining_ratio,
+            "used_value": current_usage,
+            "remaining_value": remaining,
+            "limit_value": usage_limit,
+            "reset_at": next_reset_at,
+            "reset_seconds": reset_seconds,
+        }));
+    }
+
+    let prepaid_balance = metadata
+        .get("prepaid_balance")
+        .and_then(admin_provider_quota_pure::coerce_json_f64);
+    if prepaid_balance.is_some_and(|value| value > 0.0) {
+        windows.push(json!({
+            "code": "prepaid",
+            "label": "预付额度",
+            "scope": "account",
+            "unit": "usd",
+            "used_ratio": serde_json::Value::Null,
+            "remaining_ratio": serde_json::Value::Null,
+            "remaining_value": prepaid_balance,
+            "reset_at": serde_json::Value::Null,
+            "reset_seconds": serde_json::Value::Null,
+        }));
+    }
+
+    let on_demand_cap = metadata
+        .get("on_demand_cap")
+        .and_then(admin_provider_quota_pure::coerce_json_f64);
+    let on_demand_used = metadata
+        .get("on_demand_used")
+        .and_then(admin_provider_quota_pure::coerce_json_f64);
+    let on_demand_enabled = metadata
+        .get("on_demand_enabled")
+        .and_then(admin_provider_quota_pure::coerce_json_bool)
+        != Some(false);
+    if on_demand_enabled && on_demand_cap.is_some_and(|value| value > 0.0) {
+        let on_demand_remaining = on_demand_cap
+            .zip(on_demand_used)
+            .map(|(cap, used)| (cap - used).max(0.0));
+        let on_demand_ratio = on_demand_cap
+            .zip(on_demand_used)
+            .and_then(|(cap, used)| (cap > 0.0).then_some((used / cap).clamp(0.0, 1.0)));
+        windows.push(json!({
+            "code": "on_demand",
+            "label": "按需额度",
+            "scope": "account",
+            "unit": "usd",
+            "used_ratio": on_demand_ratio,
+            "remaining_ratio": on_demand_ratio.map(|value| (1.0 - value).max(0.0)),
+            "used_value": on_demand_used,
+            "remaining_value": on_demand_remaining,
+            "limit_value": on_demand_cap,
+            "reset_at": serde_json::Value::Null,
+            "reset_seconds": serde_json::Value::Null,
+        }));
+    }
+
+    if windows.is_empty() && plan_type.is_none() && observed_at_unix_secs.is_none() {
+        return None;
+    }
+
+    let prepaid_available = prepaid_balance.is_some_and(|value| value > 0.0);
+    let on_demand_available = on_demand_enabled
+        && on_demand_cap.is_some_and(|value| value > 0.0)
+        && on_demand_used
+            .zip(on_demand_cap)
+            .is_some_and(|(used, cap)| used < cap);
+    let usage_exhausted = remaining.is_some_and(|value| value <= 0.0)
+        || usage_ratio.is_some_and(|value| value >= 1.0 - 1e-6);
+    let exhausted = usage_exhausted && !prepaid_available && !on_demand_available;
+    let reason = if exhausted {
+        Some("额度已耗尽".to_string())
+    } else {
+        None
+    };
+    let label = if exhausted {
+        Some("额度耗尽")
+    } else {
+        None
+    };
+    let code = if exhausted { "exhausted" } else { "ok" };
+
+    Some(json!({
+        "version": 2,
+        "provider_type": "xai",
+        "code": code,
+        "label": label,
+        "reason": reason,
+        "freshness": "fresh",
+        "source": source,
+        "observed_at": observed_at_unix_secs,
+        "exhausted": exhausted,
+        "usage_ratio": usage_ratio,
+        "updated_at": observed_at_unix_secs,
+        "reset_at": next_reset_at,
+        "reset_seconds": reset_seconds,
+        "plan_type": plan_type,
+        "windows": windows,
+    }))
+}
+
 fn build_chatgpt_web_quota_status_snapshot(
     upstream_metadata: Option<&Value>,
     source: &str,
@@ -2215,6 +2417,7 @@ pub(crate) fn sync_provider_key_quota_status_snapshot(
     let mut quota = match normalized_provider_type.as_str() {
         "codex" => build_codex_quota_status_snapshot(upstream_metadata, source),
         "kiro" => build_kiro_quota_status_snapshot(upstream_metadata, source),
+        "xai" => build_xai_quota_status_snapshot(upstream_metadata, source),
         "chatgpt_web" => build_chatgpt_web_quota_status_snapshot(upstream_metadata, source),
         "windsurf" => build_windsurf_quota_status_snapshot(upstream_metadata, source),
         "antigravity" => build_antigravity_quota_status_snapshot(upstream_metadata, source),
@@ -2231,7 +2434,9 @@ pub(crate) fn sync_provider_key_quota_status_snapshot(
         .or_else(|| default_snapshot.as_object().cloned())
         .unwrap_or_default();
     snapshot.insert("quota".to_string(), quota);
-    Some(Value::Object(snapshot))
+    Some(admin_provider_status_snapshot_safe_json(Some(
+        &Value::Object(snapshot),
+    )))
 }
 
 fn quota_snapshot_has_materialized_data(
@@ -2414,7 +2619,7 @@ pub(crate) fn provider_key_status_snapshot_payload(
         "account".to_string(),
         build_provider_key_account_status_snapshot(key, provider_type),
     );
-    Value::Object(snapshot)
+    admin_provider_status_snapshot_safe_json(Some(&Value::Object(snapshot)))
 }
 
 pub(crate) fn provider_key_health_summary(
@@ -2730,7 +2935,10 @@ pub(crate) fn build_admin_provider_key_response(
     );
     payload.insert("oauth_header_auth".to_string(), json!(oauth_header_auth));
     payload.insert("name".to_string(), json!(key.name));
-    payload.insert("rate_multipliers".to_string(), json!(key.rate_multipliers));
+    payload.insert(
+        "rate_multipliers".to_string(),
+        admin_secret_safe_json(key.rate_multipliers.as_ref()),
+    );
     payload.insert(
         "internal_priority".to_string(),
         json!(key.internal_priority),
@@ -2750,7 +2958,10 @@ pub(crate) fn build_admin_provider_key_response(
                 .collect(),
         ),
     );
-    payload.insert("capabilities".to_string(), json!(key.capabilities));
+    payload.insert(
+        "capabilities".to_string(),
+        admin_secret_safe_json(key.capabilities.as_ref()),
+    );
     payload.insert(
         "oauth_expires_at".to_string(),
         json!(auth_semantics
@@ -2809,7 +3020,7 @@ pub(crate) fn build_admin_provider_key_response(
     );
     payload.insert(
         "oauth_organizations".to_string(),
-        serde_json::Value::Array(oauth_organizations),
+        admin_secret_safe_json(Some(&serde_json::Value::Array(oauth_organizations))),
     );
     payload.insert("oauth_temporary".to_string(), json!(oauth_temporary));
     payload.insert(
@@ -2823,12 +3034,17 @@ pub(crate) fn build_admin_provider_key_response(
         "oauth_invalid_reason".to_string(),
         json!(auth_semantics
             .can_show_oauth_metadata()
-            .then_some(key.oauth_invalid_reason.clone())
+            .then(|| {
+                admin_provider_oauth_invalid_reason_safe_text(key.oauth_invalid_reason.as_deref())
+            })
             .flatten()),
     );
     payload.insert(
         "status_snapshot".to_string(),
-        provider_key_status_snapshot_payload(key, provider_type),
+        admin_provider_status_snapshot_safe_json(Some(&provider_key_status_snapshot_payload(
+            key,
+            provider_type,
+        ))),
     );
     payload.insert(
         "cache_ttl_minutes".to_string(),
@@ -2838,10 +3054,13 @@ pub(crate) fn build_admin_provider_key_response(
         "max_probe_interval_minutes".to_string(),
         json!(key.max_probe_interval_minutes),
     );
-    payload.insert("health_by_format".to_string(), json!(key.health_by_format));
+    payload.insert(
+        "health_by_format".to_string(),
+        admin_secret_safe_json(key.health_by_format.as_ref()),
+    );
     payload.insert(
         "circuit_breaker_by_format".to_string(),
-        json!(key.circuit_breaker_by_format),
+        admin_secret_safe_json(key.circuit_breaker_by_format.as_ref()),
     );
     payload.insert("health_score".to_string(), json!(health_score));
     payload.insert(
@@ -2890,10 +3109,9 @@ pub(crate) fn build_admin_provider_key_response(
     );
     payload.insert(
         "request_results_window".to_string(),
-        circuit_sample
-            .and_then(|value| value.get("request_results_window"))
-            .cloned()
-            .unwrap_or(serde_json::Value::Null),
+        admin_secret_safe_json(
+            circuit_sample.and_then(|value| value.get("request_results_window")),
+        ),
     );
     payload.insert("request_count".to_string(), json!(request_count));
     payload.insert("success_count".to_string(), json!(success_count));
@@ -2912,7 +3130,7 @@ pub(crate) fn build_admin_provider_key_response(
     payload.insert("effective_limit".to_string(), json!(effective_limit));
     payload.insert(
         "utilization_samples".to_string(),
-        json!(key.utilization_samples),
+        admin_secret_safe_json(key.utilization_samples.as_ref()),
     );
     payload.insert(
         "last_probe_increase_at".to_string(),
@@ -2943,7 +3161,10 @@ pub(crate) fn build_admin_provider_key_response(
     );
     payload.insert(
         "last_models_fetch_error".to_string(),
-        json!(key.last_models_fetch_error),
+        json!(key
+            .last_models_fetch_error
+            .as_deref()
+            .map(safe_model_fetch_error)),
     );
     payload.insert("locked_models".to_string(), json!(key.locked_models));
     payload.insert(
@@ -2956,10 +3177,16 @@ pub(crate) fn build_admin_provider_key_response(
     );
     payload.insert(
         "upstream_metadata".to_string(),
-        json!(key.upstream_metadata),
+        admin_provider_upstream_metadata_safe_json(key.upstream_metadata.as_ref()),
     );
-    payload.insert("proxy".to_string(), json!(key.proxy));
-    payload.insert("fingerprint".to_string(), json!(key.fingerprint));
+    payload.insert(
+        "proxy".to_string(),
+        admin_secret_safe_proxy(key.proxy.as_ref()),
+    );
+    payload.insert(
+        "fingerprint".to_string(),
+        admin_secret_safe_json(key.fingerprint.as_ref()),
+    );
     payload.insert(
         "last_used_at".to_string(),
         json!(key.last_used_at_unix_secs.and_then(unix_secs_to_rfc3339)),
@@ -3008,6 +3235,45 @@ mod tests {
             None,
         )
         .expect("key transport should build")
+    }
+
+    #[test]
+    fn admin_provider_key_health_response_preserves_v0_7_13_defaults() {
+        let state = AppState::new().expect("gateway should build");
+        for (health, expected_score) in [
+            (None, json!(1.0)),
+            (Some(json!({})), json!(1.0)),
+            (
+                Some(json!({"openai:chat": {"consecutive_failures": 0}})),
+                json!(1.0),
+            ),
+            (
+                Some(json!({"openai:chat": {"health_score": 0.0}})),
+                json!(0.0),
+            ),
+            (
+                Some(json!({"openai:chat": {"health_score": 1.0}})),
+                json!(1.0),
+            ),
+            (
+                Some(json!({
+                    "openai:chat": {"health_score": 0.25},
+                    "openai:responses": {"health_score": 0.75},
+                })),
+                json!(0.25),
+            ),
+        ] {
+            let mut key = sample_catalog_key();
+            key.health_by_format = health;
+            let payload = build_admin_provider_key_response(
+                &state,
+                &key,
+                "openai",
+                &["openai:chat".to_string()],
+                1_000,
+            );
+            assert_eq!(payload["health_score"], expected_score);
+        }
     }
 
     #[test]
@@ -3060,6 +3326,40 @@ mod tests {
         let masked = masked_catalog_api_key(&state, &key);
         assert!(masked.contains("***"));
         assert_ne!(masked, "***ERROR***");
+    }
+
+    #[test]
+    fn masked_catalog_api_key_never_returns_a_complete_short_secret() {
+        let state = AppState::new().expect("gateway should build");
+        let plaintext = "sk-test-a";
+        let encrypted_api_key =
+            encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, plaintext)
+                .expect("api key ciphertext should build");
+        let key = StoredProviderCatalogKey::new(
+            "key-short".to_string(),
+            "provider-test".to_string(),
+            "default".to_string(),
+            "api_key".to_string(),
+            None,
+            true,
+        )
+        .expect("key should build")
+        .with_transport_fields(
+            Some(json!(["openai:chat"])),
+            encrypted_api_key,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("key transport should build");
+
+        let masked = masked_catalog_api_key(&state, &key);
+        assert_ne!(masked, plaintext);
+        assert!(!masked.contains(plaintext));
     }
 
     #[test]
@@ -3483,6 +3783,43 @@ mod tests {
         assert_eq!(auto.get("remaining_value"), Some(&json!(60.0)));
         assert_eq!(auto.get("limit_value"), Some(&json!(150.0)));
         assert_eq!(auto.get("used_value"), Some(&json!(90.0)));
+    }
+
+    #[test]
+    fn provider_key_status_snapshot_payload_backfills_xai_weekly_credits() {
+        let mut key = sample_catalog_key();
+        key.upstream_metadata = Some(json!({
+            "xai": {
+                "updated_at": 1_778_067_246u64,
+                "usage_percentage": 46.0,
+                "period_type": "weekly",
+                "next_reset_at": 1_778_157_172u64,
+                "subscription_title": "SuperGrok",
+                "prepaid_balance": 0.0,
+                "on_demand_cap": 0.0,
+                "on_demand_used": 0.0
+            }
+        }));
+
+        let payload = provider_key_status_snapshot_payload(&key, "xai");
+        let quota = payload
+            .get("quota")
+            .and_then(Value::as_object)
+            .expect("quota snapshot should be object");
+        let windows = quota
+            .get("windows")
+            .and_then(Value::as_array)
+            .expect("xai quota windows should exist");
+
+        assert_eq!(quota.get("provider_type"), Some(&json!("xai")));
+        assert_eq!(quota.get("code"), Some(&json!("ok")));
+        assert_eq!(quota.get("exhausted"), Some(&json!(false)));
+        assert_eq!(quota.get("plan_type"), Some(&json!("SuperGrok")));
+        assert_eq!(quota.get("usage_ratio"), Some(&json!(0.46)));
+        assert_eq!(quota.get("reset_at"), Some(&json!(1_778_157_172u64)));
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].get("code"), Some(&json!("usage")));
+        assert_eq!(windows[0].get("label"), Some(&json!("周额度")));
     }
 
     #[test]
@@ -4400,10 +4737,7 @@ mod tests {
 
         assert_eq!(account.get("code"), Some(&json!("account_disabled")));
         assert_eq!(account.get("label"), Some(&json!("账号停用")));
-        assert_eq!(
-            account.get("reason"),
-            Some(&json!("account has been deactivated"))
-        );
+        assert_eq!(account.get("reason"), Some(&json!("Account is disabled")));
         assert_eq!(account.get("blocked"), Some(&json!(true)));
         assert_eq!(account.get("source"), Some(&json!("oauth_invalid")));
     }
@@ -4448,5 +4782,80 @@ mod tests {
         assert_eq!(account.get("label"), Some(&json!("工作区停用")));
         assert_eq!(account.get("blocked"), Some(&json!(true)));
         assert_eq!(account.get("source"), Some(&json!("metadata")));
+    }
+
+    #[test]
+    fn admin_provider_key_response_projects_historical_sensitive_diagnostics() {
+        let state = AppState::new().expect("gateway should build");
+        let mut key = sample_catalog_key();
+        key.auth_type = "oauth".to_string();
+        key.oauth_invalid_at_unix_secs = Some(1_777_000_000);
+        key.oauth_invalid_reason = Some(
+            "[ACCOUNT_BLOCK] account has been deactivated: Authorization: Bearer upstream-secret https://user:password@internal.test?q=secret"
+                .to_string(),
+        );
+        key.last_models_fetch_error = Some(
+            "request failed for https://user:password@internal.test/models?q=secret; Authorization: Bearer upstream-secret"
+                .to_string(),
+        );
+        key.status_snapshot = Some(json!({
+            "oauth": {
+                "code": "invalid",
+                "reason": "Authorization: Bearer upstream-secret"
+            },
+            "account": {
+                "code": "account_disabled",
+                "reason": "https://user:password@internal.test?q=secret",
+                "blocked": true
+            },
+            "quota": {
+                "provider_type": "codex",
+                "code": "cooldown",
+                "reason": "Authorization: Bearer upstream-secret",
+                "exhausted": false,
+                "reset_credits": {
+                    "detail_error": "https://user:password@internal.test?q=secret"
+                },
+                "unknown": {"body": "upstream-secret"}
+            }
+        }));
+        key.upstream_metadata = Some(json!({
+            "codex": {
+                "primary_used_percent": 25.0,
+                "message": "Authorization: Bearer upstream-secret",
+                "reset_credits": {
+                    "detail_error": "https://user:password@internal.test?q=secret"
+                }
+            }
+        }));
+
+        let payload = build_admin_provider_key_response(
+            &state,
+            &key,
+            "codex",
+            &["openai:responses".to_string()],
+            1_777_000_001,
+        );
+
+        assert_eq!(
+            payload["oauth_invalid_reason"],
+            json!("[ACCOUNT_BLOCK] Account is disabled")
+        );
+        assert_eq!(
+            payload["last_models_fetch_error"],
+            json!("Upstream models fetch failed")
+        );
+        assert_eq!(
+            payload.pointer("/status_snapshot/account/reason"),
+            Some(&json!("Account is disabled"))
+        );
+        assert_eq!(
+            payload.pointer("/upstream_metadata/codex/primary_used_percent"),
+            Some(&json!(25.0))
+        );
+        let serialized = payload.to_string();
+        assert!(!serialized.contains("upstream-secret"));
+        assert!(!serialized.contains("user:password"));
+        assert!(!serialized.contains("q=secret"));
     }
 }
