@@ -3,6 +3,8 @@ use serde_json::{Map, Value};
 use super::auth::{AntigravityRequestAuth, ANTIGRAVITY_REQUEST_USER_AGENT};
 use super::schema::{normalize_claude_unions, normalize_tool_parameters, SchemaBudget};
 
+const ANTIGRAVITY_CLAUDE_MAX_OUTPUT_TOKENS: u64 = 64_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AntigravityEnvelopeRequestType {
     Agent,
@@ -80,6 +82,7 @@ pub fn build_antigravity_safe_v1internal_request(
         inner_request.remove("model");
         inner_request.remove("safetySettings");
         inner_request.remove("safety_settings");
+        clamp_antigravity_claude_max_output_tokens(&mut inner_request, model);
         normalize_antigravity_claude_thought_history(&mut inner_request, model);
         normalize_antigravity_builtin_tool_names(&mut inner_request);
         if normalize_antigravity_function_declaration_parameters(&mut inner_request, model).is_err()
@@ -112,6 +115,7 @@ pub fn build_antigravity_safe_v1internal_request(
     inner_request.remove("model");
     inner_request.remove("safetySettings");
     inner_request.remove("safety_settings");
+    clamp_antigravity_claude_max_output_tokens(&mut inner_request, model);
     normalize_antigravity_claude_thought_history(&mut inner_request, model);
     normalize_antigravity_builtin_tool_names(&mut inner_request);
     if normalize_antigravity_function_declaration_parameters(&mut inner_request, model).is_err() {
@@ -161,6 +165,32 @@ fn normalize_antigravity_builtin_tool_names(request: &mut Map<String, Value>) {
                 .or_insert(payload);
         }
     }
+}
+
+/// Cloud Code's Claude bridge rejects `maxOutputTokens` above 64,000 with a
+/// bare `400 INVALID_ARGUMENT`. Gemini models have different ceilings, so keep
+/// this compatibility clamp specific to Claude at the Antigravity boundary.
+fn clamp_antigravity_claude_max_output_tokens(request: &mut Map<String, Value>, model: &str) {
+    if !model.trim().to_ascii_lowercase().starts_with("claude-") {
+        return;
+    }
+    let Some(generation_config) = request
+        .get_mut("generationConfig")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let Some(max_output_tokens) = generation_config
+        .get_mut("maxOutputTokens")
+        .filter(|value| {
+            value
+                .as_u64()
+                .is_some_and(|tokens| tokens > ANTIGRAVITY_CLAUDE_MAX_OUTPUT_TOKENS)
+        })
+    else {
+        return;
+    };
+    *max_output_tokens = Value::from(ANTIGRAVITY_CLAUDE_MAX_OUTPUT_TOKENS);
 }
 
 /// Claude requires a replayable signature on historical thinking blocks. In
@@ -785,6 +815,61 @@ mod tests {
             tools[0].get("googleSearchRetrieval").is_none(),
             "the Gemini 1.5 spelling must not be reintroduced: {tools:?}"
         );
+    }
+
+    #[test]
+    fn antigravity_claude_clamps_max_output_tokens_to_cloud_code_ceiling() {
+        for wrapped in [false, true] {
+            let inner = json!({
+                "contents": [{ "role": "user", "parts": [{ "text": "hello" }] }],
+                "generationConfig": { "maxOutputTokens": 65536 }
+            });
+            let body = if wrapped {
+                json!({ "request": inner, "requestId": "client-request-id" })
+            } else {
+                inner
+            };
+            let AntigravityRequestEnvelopeSupport::Supported(envelope) =
+                build_antigravity_safe_v1internal_request(
+                    &sample_auth(),
+                    "trace-id",
+                    "claude-opus-4-6-thinking",
+                    &body,
+                    AntigravityEnvelopeRequestType::Agent,
+                )
+            else {
+                panic!("Claude request should be supported");
+            };
+            assert_eq!(
+                envelope["request"]["generationConfig"]["maxOutputTokens"], 64000,
+                "wrapped={wrapped}"
+            );
+        }
+
+        for (model, requested, expected) in [
+            ("claude-opus-4-6-thinking", 64000, 64000),
+            ("gemini-3.8-flash-high", 65536, 65536),
+        ] {
+            let body = json!({
+                "contents": [{ "role": "user", "parts": [{ "text": "hello" }] }],
+                "generationConfig": { "maxOutputTokens": requested }
+            });
+            let AntigravityRequestEnvelopeSupport::Supported(envelope) =
+                build_antigravity_safe_v1internal_request(
+                    &sample_auth(),
+                    "trace-id",
+                    model,
+                    &body,
+                    AntigravityEnvelopeRequestType::Agent,
+                )
+            else {
+                panic!("request should be supported");
+            };
+            assert_eq!(
+                envelope["request"]["generationConfig"]["maxOutputTokens"], expected,
+                "model={model}"
+            );
+        }
     }
 
     #[test]
