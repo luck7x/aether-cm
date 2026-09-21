@@ -385,6 +385,31 @@ fn build_same_format_provider_request_body_inner(
         return Some(body);
     }
 
+    // TypeSafe SystemOne is a native, non-chat protocol. Preserve its
+    // `state/questions` envelope verbatim and only rewrite the upstream model
+    // alias (`jev-1` -> `jev-1.13.0`). It must never pass through the standard
+    // OpenAI/Claude/Gemini canonical converter.
+    if aether_ai_formats::api_format_alias_matches(
+        input.provider_api_format,
+        "typesafe:systemone",
+    ) {
+        let mut body = input.body_json.clone();
+        let object = body.as_object_mut()?;
+        object.insert(
+            "model".to_string(),
+            Value::String(input.mapped_model.to_string()),
+        );
+        if !apply_local_body_rules_with_request_headers(
+            &mut body,
+            input.body_rules,
+            Some(input.body_json),
+            input.request_headers,
+        ) {
+            return None;
+        }
+        return Some(body);
+    }
+
     if embedding_multimodal_input_requires_aliyun_provider(
         input.client_api_format,
         input.provider_api_format,

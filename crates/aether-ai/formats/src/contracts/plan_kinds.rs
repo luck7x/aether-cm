@@ -33,6 +33,7 @@ pub const OPENAI_RESPONSES_COMPACT_SYNC_PLAN_KIND: &str = "openai_responses_comp
 pub const CLAUDE_CHAT_SYNC_PLAN_KIND: &str = "claude_chat_sync";
 pub const GEMINI_CHAT_SYNC_PLAN_KIND: &str = "gemini_chat_sync";
 pub const GEMINI_INTERACTIONS_SYNC_PLAN_KIND: &str = "gemini_interactions_sync";
+pub const TYPESAFE_SYSTEMONE_SYNC_PLAN_KIND: &str = "typesafe_systemone_sync";
 pub const CLAUDE_CLI_SYNC_PLAN_KIND: &str = "claude_cli_sync";
 pub const GEMINI_CLI_SYNC_PLAN_KIND: &str = "gemini_cli_sync";
 

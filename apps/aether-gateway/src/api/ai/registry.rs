@@ -32,6 +32,7 @@ const AI_POST_ROUTE_PATTERNS: &[&str] = &[
     "/v1/images/edits",
     "/v1/interactions",
     "/v1beta/interactions",
+    "/v1/systemone",
     "/v1internal:loadCodeAssist",
     "/v1internal:fetchAvailableModels",
     "/v1internal:retrieveUserQuotaSummary",
@@ -162,6 +163,7 @@ pub(crate) fn public_api_format_local_path(api_format: &str) -> &'static str {
         .or_else(|| jina::local_path(&normalized))
         .or_else(|| doubao::local_path(&normalized))
         .or_else(|| aliyun::local_path(&normalized))
+        .or_else(|| (normalized == "typesafe:systemone").then_some("/v1/systemone"))
         .unwrap_or("/")
 }
 
@@ -173,6 +175,7 @@ pub(crate) fn normalize_admin_endpoint_signature(api_format: &str) -> Option<&'s
         .or_else(|| jina::normalized_signature(&normalized))
         .or_else(|| doubao::normalized_signature(&normalized))
         .or_else(|| aliyun::normalized_signature(&normalized))
+        .or_else(|| (normalized == "typesafe:systemone").then_some("typesafe:systemone"))
 }
 
 pub(crate) fn admin_endpoint_signature_parts(

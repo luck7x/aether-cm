@@ -16,6 +16,7 @@ use crate::contracts::{
     OPENAI_RESPONSES_COMPACT_SYNC_PLAN_KIND, OPENAI_RESPONSES_STREAM_PLAN_KIND,
     OPENAI_RESPONSES_SYNC_PLAN_KIND, OPENAI_SEARCH_SYNC_PLAN_KIND,
     OPENAI_VIDEO_CANCEL_SYNC_PLAN_KIND, OPENAI_VIDEO_CONTENT_PLAN_KIND,
+    TYPESAFE_SYSTEMONE_SYNC_PLAN_KIND,
     OPENAI_VIDEO_CREATE_SYNC_PLAN_KIND, OPENAI_VIDEO_DELETE_SYNC_PLAN_KIND,
     OPENAI_VIDEO_REMIX_SYNC_PLAN_KIND,
 };
@@ -260,6 +261,14 @@ pub fn resolve_execution_runtime_sync_plan_kind_with_client_surface(
         && matches!(path, "/v1/interactions" | "/v1beta/interactions")
     {
         return Some(GEMINI_INTERACTIONS_SYNC_PLAN_KIND);
+    }
+
+    if route_family == Some("typesafe")
+        && route_kind == Some("systemone")
+        && *method == Method::POST
+        && path == "/v1/systemone"
+    {
+        return Some(TYPESAFE_SYSTEMONE_SYNC_PLAN_KIND);
     }
 
     if route_family == Some("openai")
@@ -593,6 +602,7 @@ pub fn supports_sync_execution_decision_kind(plan_kind: &str) -> bool {
             | GEMINI_CLI_SYNC_PLAN_KIND
             | GEMINI_EMBEDDING_SYNC_PLAN_KIND
             | GEMINI_INTERACTIONS_SYNC_PLAN_KIND
+            | TYPESAFE_SYSTEMONE_SYNC_PLAN_KIND
             | GEMINI_FILES_UPLOAD_PLAN_KIND
             | OPENAI_VIDEO_CREATE_SYNC_PLAN_KIND
             | OPENAI_VIDEO_REMIX_SYNC_PLAN_KIND
