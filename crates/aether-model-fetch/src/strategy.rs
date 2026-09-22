@@ -23,7 +23,7 @@ use crate::logic::{
     aggregate_models_for_cache, codex_model_identity, extract_error_message,
     merge_codex_models_preserving_cards, parse_codex_models_response_page,
     parse_models_response_page, parse_windsurf_model_configs_response, preset_models_for_provider,
-    project_codex_models_for_legacy_cache, normalize_api_format,
+    project_codex_models_for_legacy_cache,
 };
 use crate::transport::{
     build_antigravity_fetch_available_models_plan, build_antigravity_load_code_assist_plan,
@@ -184,7 +184,7 @@ fn select_model_fetch_strategy(
         .trim()
         .to_ascii_lowercase();
     if transports.iter().any(|transport| {
-        normalize_api_format(&transport.endpoint.api_format) == "typesafe:systemone"
+        transport.endpoint.api_format.trim().to_ascii_lowercase() == "typesafe:systemone"
     }) {
         return Ok(SelectedModelFetchStrategy {
             provider_type,
