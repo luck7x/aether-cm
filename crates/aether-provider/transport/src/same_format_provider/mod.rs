@@ -996,6 +996,14 @@ fn resolve_same_format_standard_direct_auth(
     transport: &GatewayProviderTransportSnapshot,
     provider_api_format: &str,
 ) -> Option<(String, String)> {
+    // TypeSafe SystemOne accepts the provider credential as an OpenAI-style
+    // Bearer token.  Some existing provider-key records were created with the
+    // generic `api_key` auth type, which would otherwise emit `x-api-key` and
+    // makes the upstream return 403.  Keep this protocol-specific override
+    // here so it applies to normal execution without changing stored data.
+    if aether_ai_formats::api_format_alias_matches(provider_api_format, "typesafe:systemone") {
+        return resolve_local_openai_bearer_auth(transport);
+    }
     if aether_ai_formats::api_format_alias_matches(provider_api_format, "openai:embedding")
         || aether_ai_formats::api_format_alias_matches(provider_api_format, "openai:search")
         || aether_ai_formats::api_format_alias_matches(provider_api_format, "openai:realtime")
