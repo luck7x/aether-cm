@@ -27,5 +27,6 @@ curl --fail-with-body --silent --show-error --max-time 60 \
   --data "${body}"
 
 status="$(awk 'NR==1 {print $2}' "${tmp_headers}")"
-jq -e . "${tmp_body}" >/dev/null
-echo "TypeSafe standalone SystemOne OK: status=${status} model=${MODEL}"
+jq -e 'type == "object"' "${tmp_body}" >/dev/null
+response_keys="$(jq -r 'keys | join(",")' "${tmp_body}")"
+echo "TypeSafe standalone SystemOne OK: status=${status} model=${MODEL} response_keys=${response_keys}"
