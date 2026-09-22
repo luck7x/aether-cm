@@ -318,6 +318,9 @@ fn select_primary_credential(
     if signature.starts_with("openai:") || signature.starts_with("codex:") {
         return select_openai_credential(bundle);
     }
+    if signature.starts_with("typesafe:") {
+        return select_openai_credential(bundle);
+    }
     if signature.starts_with("aether:") {
         return select_openai_credential(bundle);
     }
