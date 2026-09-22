@@ -240,6 +240,12 @@ fn build_transport_request_url_inner(
         } else {
             build_claude_messages_url(request_base_url, params.request_query)
         }),
+        "typesafe:systemone" => build_passthrough_path_url(
+            request_base_url,
+            "/systemone",
+            params.request_query,
+            GATEWAY_CREDENTIAL_QUERY_KEYS,
+        ),
         "gemini:generate_content" => build_gemini_content_url(
             request_base_url,
             params.mapped_model?,
