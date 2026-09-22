@@ -3381,7 +3381,7 @@ async fn provider_query_execute_standard_test_candidate(
             crate::provider_transport::auth::resolve_local_openai_bearer_auth(&transport)
                 .or(oauth_auth)
         }
-        "claude:messages" => {
+        "claude:messages" | "typesafe:systemone" => {
             crate::provider_transport::auth::resolve_local_standard_auth(&transport).or(oauth_auth)
         }
         "gemini:generate_content" | "gemini:embedding" => {
