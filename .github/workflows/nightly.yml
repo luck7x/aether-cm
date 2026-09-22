@@ -1,9 +1,8 @@
 name: Nightly Release
 
 on:
-  # 02:17 Asia/Shanghai (18:17 UTC) every day.
-  schedule:
-    - cron: '17 18 * * *'
+  # Nightly scheduling is intentionally disabled for this fork.
+  # Run it manually only when an operator explicitly requests it.
   workflow_dispatch:
 
 # Checks and builds only need read access. Publishing jobs opt into write access
