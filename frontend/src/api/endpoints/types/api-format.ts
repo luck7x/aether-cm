@@ -1,6 +1,7 @@
 // API 格式常量
 export const API_FORMATS = {
   // 新模式：endpoint signature key（family:kind，全小写）
+  TYPESAFE_SYSTEMONE: 'typesafe:systemone',
   CLAUDE: 'claude:messages',
   CLAUDE_MESSAGES: 'claude:messages',
   OPENAI: 'openai:chat',
@@ -29,6 +30,7 @@ export type APIFormat = typeof API_FORMATS[keyof typeof API_FORMATS]
 
 // API 格式显示名称映射（按品牌分组）
 export const API_FORMAT_LABELS: Record<string, string> = {
+  [API_FORMATS.TYPESAFE_SYSTEMONE]: 'TypeSafe SystemOne',
   [API_FORMATS.CLAUDE_MESSAGES]: 'Claude Messages',
   [API_FORMATS.OPENAI]: 'OpenAI Chat',
   [API_FORMATS.OPENAI_RESPONSES]: 'OpenAI Responses',
@@ -73,10 +75,13 @@ export const API_FORMAT_LABELS: Record<string, string> = {
   JINA_RERANK: 'Jina Rerank',
   DOUBAO_EMBEDDING: 'Doubao Embedding',
   ALIYUN_MULTIMODAL_EMBEDDING: 'Aliyun Multimodal Embedding',
+  TYPESAFE_SYSTEMONE: 'TypeSafe SystemOne',
+  SYSTEMONE: 'TypeSafe SystemOne',
 }
 
 // API 格式缩写映射（用于空间紧凑的显示场景）
 export const API_FORMAT_SHORT: Record<string, string> = {
+  [API_FORMATS.TYPESAFE_SYSTEMONE]: 'TS',
   [API_FORMATS.OPENAI]: 'O',
   [API_FORMATS.OPENAI_RESPONSES]: 'OR',
   [API_FORMATS.OPENAI_RESPONSES_COMPACT]: 'ORC',
@@ -121,10 +126,13 @@ export const API_FORMAT_SHORT: Record<string, string> = {
   JINA_RERANK: 'JR',
   DOUBAO_EMBEDDING: 'DE',
   ALIYUN_MULTIMODAL_EMBEDDING: 'AE',
+  TYPESAFE_SYSTEMONE: 'TS',
+  SYSTEMONE: 'TS',
 }
 
 // API 格式排序顺序（统一的显示顺序）
 export const API_FORMAT_ORDER: string[] = [
+  API_FORMATS.TYPESAFE_SYSTEMONE,
   API_FORMATS.OPENAI,
   API_FORMATS.OPENAI_RESPONSES,
   API_FORMATS.OPENAI_RESPONSES_COMPACT,
@@ -149,6 +157,7 @@ export const API_FORMAT_ORDER: string[] = [
 
 // Family 显示名称映射
 export const API_FORMAT_FAMILY_LABELS: Record<string, string> = {
+  typesafe: 'TypeSafe',
   openai: 'OpenAI',
   codex: 'Codex',
   claude: 'Claude',
@@ -160,6 +169,7 @@ export const API_FORMAT_FAMILY_LABELS: Record<string, string> = {
 
 // Kind 显示名称映射
 export const API_FORMAT_KIND_LABELS: Record<string, string> = {
+  systemone: 'SystemOne',
   chat: 'Chat',
   responses: 'Responses',
   'responses:compact': 'Responses Compact',
@@ -177,7 +187,7 @@ export const API_FORMAT_KIND_LABELS: Record<string, string> = {
 }
 
 // Family 排序顺序
-const FAMILY_ORDER = ['openai', 'codex', 'claude', 'gemini', 'jina', 'doubao', 'aliyun']
+const FAMILY_ORDER = ['typesafe', 'openai', 'codex', 'claude', 'gemini', 'jina', 'doubao', 'aliyun']
 
 // 工具函数：从 API 格式中提取 family 和 kind
 export function parseApiFormat(format: string): { family: string; kind: string } {
@@ -191,6 +201,10 @@ export function normalizeApiFormatAlias(format: string | null | undefined): stri
   // Only normalize current enum-style frontend constants. Retired API format ids
   // are migrated in the database and intentionally do not map at runtime.
   switch (raw.toUpperCase()) {
+    case 'TYPESAFE':
+    case 'TYPESAFE_SYSTEMONE':
+    case 'SYSTEMONE':
+      return API_FORMATS.TYPESAFE_SYSTEMONE
     case 'CLAUDE':
     case 'CLAUDE_MESSAGES':
       return API_FORMATS.CLAUDE_MESSAGES

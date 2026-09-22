@@ -3027,6 +3027,25 @@ async fn provider_query_execute_standard_test_candidate(
         transport.endpoint.config.as_ref(),
     );
     let mut provider_request_body = match normalized_provider_api_format.as_str() {
+        "typesafe:systemone" => {
+            let message = request_body
+                .get("messages")
+                .and_then(Value::as_array)
+                .and_then(|messages| messages.last())
+                .and_then(|message| message.get("content"))
+                .and_then(Value::as_str)
+                .unwrap_or(DEFAULT_PROVIDER_QUERY_TEST_MESSAGE);
+            json!({
+                "model": request_model,
+                "state": message,
+                "questions": {
+                    "model_test": {
+                        "type": "noul",
+                        "instructions": "Is this a connectivity test?"
+                    }
+                }
+            })
+        }
         "openai:chat" => {
             let Some(mut provider_request_body) =
                 crate::ai_serving::build_local_openai_chat_request_body(
@@ -3904,6 +3923,12 @@ async fn build_admin_provider_query_kiro_failover_response(
                     .await
                 }
                 Some(ProviderQueryTestAdapter::Standard) => {
+                    provider_query_execute_standard_test_candidate(
+                        state, &provider, candidate, payload, route_path, &trace_id,
+                    )
+                    .await
+                }
+                Some(ProviderQueryTestAdapter::TypeSafe) => {
                     provider_query_execute_standard_test_candidate(
                         state, &provider, candidate, payload, route_path, &trace_id,
                     )

@@ -100,6 +100,7 @@ impl<T: PartialEq> ConsistentValue<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelFetchStrategyKind {
     PresetCatalog,
+    TypeSafe,
     StandardTransport,
     Vertex,
     Antigravity,
@@ -182,6 +183,19 @@ fn select_model_fetch_strategy(
         .provider_type
         .trim()
         .to_ascii_lowercase();
+    if transports.iter().any(|transport| {
+        normalize_api_format(&transport.endpoint.api_format) == "typesafe:systemone"
+    }) {
+        return Ok(SelectedModelFetchStrategy {
+            provider_type,
+            kind: ModelFetchStrategyKind::TypeSafe,
+            preset_models: Some(vec![json!({
+                "id": "jev-latest",
+                "object": "model",
+                "owned_by": "typesafe"
+            })]),
+        });
+    }
     if let Some(models) = preset_models_for_provider(&provider_type) {
         if provider_type == "kiro" {
             return Ok(SelectedModelFetchStrategy {
@@ -245,6 +259,11 @@ async fn execute_model_fetch_strategy(
 
     match strategy.kind() {
         ModelFetchStrategyKind::PresetCatalog => Ok(build_success_outcome(
+            strategy.preset_models.unwrap_or_default(),
+            None,
+            true,
+        )),
+        ModelFetchStrategyKind::TypeSafe => Ok(build_success_outcome(
             strategy.preset_models.unwrap_or_default(),
             None,
             true,

@@ -944,6 +944,12 @@ const SENSITIVE_SYSTEM_CONFIG_KEYS: &[&str] = &[
 ];
 const ADMIN_API_FORMAT_DEFINITIONS: &[AdminApiFormatDefinition] = &[
     AdminApiFormatDefinition {
+        value: "typesafe:systemone",
+        label: "TypeSafe SystemOne",
+        default_path: "/v1/systemone",
+        aliases: &["typesafe", "systemone"],
+    },
+    AdminApiFormatDefinition {
         value: "openai:chat",
         label: "OpenAI Chat",
         default_path: "/v1/chat/completions",

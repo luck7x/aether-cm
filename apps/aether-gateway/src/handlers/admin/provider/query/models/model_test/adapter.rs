@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProviderQueryTestAdapter {
     Standard,
+    TypeSafe,
     Grok,
     Kiro,
     OpenAiImage,
@@ -242,6 +243,9 @@ pub(super) fn provider_query_test_adapter_for_provider_api_format(
     }
 
     let normalized_api_format = provider_query_normalize_api_format_alias(api_format);
+    if normalized_api_format == "typesafe:systemone" {
+        return Some(ProviderQueryTestAdapter::TypeSafe);
+    }
     if provider_type.trim().eq_ignore_ascii_case("grok") {
         return match normalized_api_format.as_str() {
             "openai:chat" | "openai:responses" | "openai:responses:compact" | "claude:messages" => {
@@ -289,6 +293,7 @@ pub(super) fn provider_query_model_test_endpoint_priority(
     let normalized_api_format = provider_query_normalize_api_format_alias(api_format);
     match provider_query_test_adapter_for_provider_api_format(provider_type, api_format)? {
         ProviderQueryTestAdapter::Kiro => Some(0),
+        ProviderQueryTestAdapter::TypeSafe => Some(0),
         ProviderQueryTestAdapter::Grok => {
             if matches!(
                 normalized_api_format.as_str(),
@@ -345,6 +350,11 @@ pub(super) fn provider_query_transport_supports_model_test_execution(
     ) {
         Some(ProviderQueryTestAdapter::Kiro) => {
             supports_local_kiro_request_transport_with_network(transport)
+        }
+        Some(ProviderQueryTestAdapter::TypeSafe) => {
+            transport.provider.is_active
+                && transport.endpoint.is_active
+                && transport.key.is_active
         }
         Some(ProviderQueryTestAdapter::OpenAiImage) => {
             crate::provider_transport::openai_image_transport_unsupported_reason(

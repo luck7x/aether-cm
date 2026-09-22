@@ -540,6 +540,7 @@ pub fn endpoint_supports_rust_models_fetch(api_format: &str) -> bool {
             | "openai:responses:compact"
             | "claude:messages"
             | "gemini:generate_content"
+            | "typesafe:systemone"
     )
 }
 

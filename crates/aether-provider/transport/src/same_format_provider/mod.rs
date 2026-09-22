@@ -387,7 +387,7 @@ fn build_same_format_provider_request_body_inner(
 
     // TypeSafe SystemOne is a native, non-chat protocol. Preserve its
     // `state/questions` envelope verbatim and only rewrite the upstream model
-    // alias (`jev-1` -> `jev-1.13.0`). It must never pass through the standard
+    // alias (for example `jev-latest` -> the current jev release). It must never pass through the standard
     // OpenAI/Claude/Gemini canonical converter.
     if aether_ai_formats::api_format_alias_matches(
         input.provider_api_format,
