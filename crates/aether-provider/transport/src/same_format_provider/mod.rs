@@ -916,6 +916,7 @@ pub fn same_format_provider_transport_unsupported_reason_for_trace(
             "openai:responses:compact" => "openai:responses:compact",
             "openai:search" => "openai:search",
             "claude:messages" => "claude:messages",
+            "typesafe:systemone" => "typesafe:systemone",
             "gemini:generate_content" => "gemini:generate_content",
             "gemini:interactions" => "gemini:interactions",
             _ => return Some("transport_api_format_unsupported"),

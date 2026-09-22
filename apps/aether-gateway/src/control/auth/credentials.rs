@@ -607,6 +607,28 @@ mod tests {
     }
 
     #[test]
+    fn selects_typesafe_systemone_bearer_as_provider_api_key() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::AUTHORIZATION,
+            "Bearer sk-typesafe".parse().unwrap(),
+        );
+
+        let extracted = extract_request_credentials(
+            &headers,
+            &uri("/v1/systemone"),
+            "typesafe:systemone",
+        );
+        assert_eq!(
+            extracted.primary,
+            Some(GatewayPrimaryCredential::ProviderApiKey {
+                raw: "sk-typesafe".to_string(),
+                carrier: GatewayCredentialCarrier::AuthorizationBearer,
+            })
+        );
+    }
+
+    #[test]
     fn rejects_duplicate_or_combined_authorization_credentials() {
         let mut duplicate = http::HeaderMap::new();
         duplicate.append(
