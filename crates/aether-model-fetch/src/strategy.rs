@@ -184,7 +184,11 @@ fn select_model_fetch_strategy(
         .trim()
         .to_ascii_lowercase();
     if transports.iter().any(|transport| {
-        transport.endpoint.api_format.trim().to_ascii_lowercase() == "typesafe:systemone"
+        transport
+            .endpoint
+            .api_format
+            .trim()
+            .eq_ignore_ascii_case("typesafe:systemone")
     }) {
         return Ok(SelectedModelFetchStrategy {
             provider_type,

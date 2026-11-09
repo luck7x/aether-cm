@@ -360,7 +360,15 @@ pub(super) async fn run_responses_websocket(
     };
 
     let relay_result = supervise_responses_websocket_phase(
-        relay_bound_connection(&mut client_socket, &mut bound, &state, &context),
+        // The relay owns a large async state machine (planning, redaction,
+        // heartbeat and failover branches). Keep it on the heap so individual
+        // test/runtime worker stacks do not grow with future protocol branches.
+        Box::pin(relay_bound_connection(
+            &mut client_socket,
+            &mut bound,
+            &state,
+            &context,
+        )),
         connection_deadline,
         connection_permit.as_ref(),
     )
