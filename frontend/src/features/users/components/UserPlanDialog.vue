@@ -12,10 +12,10 @@
           </div>
           <div class="min-w-0 flex-1">
             <h3 class="text-lg font-semibold leading-tight text-foreground">
-              {{ legacyT('用户套餐') }}
+              {{ t('ui.userPlans') }}
             </h3>
             <p class="text-xs text-muted-foreground">
-              {{ userName || '-' }} · {{ legacyT('查看当前套餐并手动发放') }}
+              {{ userName || '-' }} · {{ t('ui.viewCurrentPlansAndGrantManually') }}
             </p>
           </div>
         </div>
@@ -24,13 +24,13 @@
 
     <div class="max-h-[64vh] space-y-4 overflow-y-auto">
       <div class="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-100/90">
-        {{ legacyT('后台发放会立即生效；新旧套餐包含同类每日额度、同类会员权益或同名互斥组时，旧套餐整包失效。') }}
+        {{ t('ui.grantedPlansTakeEffectImmediatelyExistingPlansAreReplacedEntirely') }}
       </div>
 
       <section class="space-y-2.5">
         <div class="flex items-center justify-between gap-3">
           <h4 class="text-sm font-semibold text-foreground">
-            {{ legacyT('当前有效套餐') }}
+            {{ t('ui.currentActivePlans') }}
           </h4>
           <Button
             variant="ghost"
@@ -39,83 +39,39 @@
             :disabled="loadingEntitlements || !userId"
             @click="userId && $emit('refresh-entitlements', userId)"
           >
-            {{ loadingEntitlements ? legacyT('加载中...') : legacyT('刷新') }}
+            {{ loadingEntitlements ? t('common.loading') : t('ui.refresh') }}
           </Button>
         </div>
 
-        <div
-          v-if="loadingEntitlements"
-          class="rounded-lg border border-dashed border-border/60 bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground"
+        <UserPlanList
+          :entitlements="entitlements"
+          :loading="loadingEntitlements"
+          :format-date-time="formatDateTime"
+          :entitlement-labels="entitlementLabels"
+          :empty-text="t('ui.noActivePlans705f0e1')"
         >
-          {{ legacyT('正在加载用户套餐...') }}
-        </div>
-        <div
-          v-else-if="entitlements.length === 0"
-          class="rounded-lg border border-dashed border-border/60 bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground"
-        >
-          {{ legacyT('当前没有有效套餐') }}
-        </div>
-        <div
-          v-else
-          class="space-y-2.5"
-        >
-          <div
-            v-for="item in entitlements"
-            :key="item.id"
-            class="rounded-lg border border-border bg-card/80 p-3"
-          >
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div class="min-w-0 flex-1">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="font-medium text-foreground">
-                    {{ item.plan_title || item.plan?.title || item.plan_id }}
-                  </span>
-                  <Badge
-                    :variant="item.active ? 'success' : 'secondary'"
-                    class="h-5 px-1.5 py-0 text-[10px]"
-                  >
-                    {{ item.active ? legacyT('生效中') : item.status }}
-                  </Badge>
-                </div>
-                <div class="mt-2 flex flex-wrap gap-1.5">
-                  <Badge
-                    v-for="(label, index) in entitlementLabels(item.entitlements)"
-                    :key="`${label}-${index}`"
-                    variant="outline"
-                    class="h-5 px-1.5 py-0 text-[10px]"
-                  >
-                    {{ label }}
-                  </Badge>
-                </div>
-              </div>
-              <div class="flex shrink-0 items-start gap-2">
-                <div class="text-left text-[11px] text-muted-foreground sm:text-right">
-                  <div>{{ legacyT('开始：') }}{{ formatDateTime(item.starts_at) }}</div>
-                  <div>{{ legacyT('到期：') }}{{ formatDateTime(item.expires_at) }}</div>
-                </div>
-                <Button
-                  v-if="item.active"
-                  variant="destructive"
-                  size="sm"
-                  class="h-7 px-2 text-[11px]"
-                  :disabled="revokingEntitlementId === item.id"
-                  @click="$emit('revoke', item)"
-                >
-                  {{ revokingEntitlementId === item.id ? legacyT('撤销中...') : legacyT('撤销套餐') }}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
+          <template #actions="{ item }">
+            <Button
+              v-if="item.active"
+              variant="destructive"
+              size="sm"
+              class="h-7 px-2 text-[11px]"
+              :disabled="revokingEntitlementId === item.id"
+              @click="$emit('revoke', item)"
+            >
+              {{ revokingEntitlementId === item.id ? t('ui.revoking') : t('ui.revokePlan') }}
+            </Button>
+          </template>
+        </UserPlanList>
       </section>
 
       <section class="space-y-3 rounded-lg border border-border bg-card/70 p-4">
         <div class="space-y-1">
           <h4 class="text-sm font-semibold text-foreground">
-            {{ legacyT('发放套餐') }}
+            {{ t('ui.grantPlan1428b3a') }}
           </h4>
           <p class="text-xs text-muted-foreground">
-            {{ legacyT('仅发放套餐权益，不产生用户付款；命中同类权益或同名互斥组时，冲突的旧套餐会整包失效。') }}
+            {{ t('ui.grantBenefitsWithoutChargingTheUserExistingPlansWithConflicting') }}
           </p>
         </div>
 
@@ -127,7 +83,7 @@
             class="h-9 rounded-md bg-muted/50 px-3"
             :disabled="loadingPlans || plans.length === 0"
           >
-            <SelectValue :placeholder="loadingPlans ? legacyT('加载套餐中...') : legacyT('选择要发放的套餐')" />
+            <SelectValue :placeholder="loadingPlans ? t('ui.loadingPlans5a289c6') : t('ui.selectAPlanToGrant')" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem
@@ -144,7 +100,7 @@
                   v-if="!plan.enabled"
                   class="shrink-0 text-[10px] text-amber-400"
                 >
-                  {{ legacyT('已下架') }}
+                  {{ t('ui.unlisted') }}
                 </span>
               </div>
             </SelectItem>
@@ -155,7 +111,7 @@
           :model-value="grantReason"
           class="min-h-[60px] resize-y rounded-md bg-muted/50 text-sm"
           maxlength="512"
-          :placeholder="legacyT('备注（可选，例如：人工补偿、活动赠送）')"
+          :placeholder="t('ui.notesOptionalEGManualCompensationOrCampaignGift')"
           @update:model-value="$emit('update:grantReason', $event)"
         />
 
@@ -165,7 +121,7 @@
             :disabled="granting || !userId || !selectedPlanId"
             @click="$emit('grant')"
           >
-            {{ granting ? legacyT('发放中...') : legacyT('发放套餐') }}
+            {{ granting ? t('ui.granting') : t('ui.grantPlan1428b3a') }}
           </Button>
         </div>
       </section>
@@ -177,7 +133,7 @@
         class="h-10 px-5"
         @click="$emit('close')"
       >
-        {{ legacyT('关闭') }}
+        {{ t('ui.close') }}
       </Button>
     </template>
   </Dialog>
@@ -185,8 +141,8 @@
 
 <script setup lang="ts">
 import { PackageCheck } from 'lucide-vue-next'
+import UserPlanList from './UserPlanList.vue'
 import {
-  Badge,
   Button,
   Dialog,
   Select,
@@ -227,5 +183,5 @@ defineEmits<{
   revoke: [entitlement: AdminUserPlanEntitlement]
 }>()
 
-const { legacyT } = useI18n()
+const { t } = useI18n()
 </script>

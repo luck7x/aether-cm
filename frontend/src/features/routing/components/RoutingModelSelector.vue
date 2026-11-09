@@ -1,13 +1,23 @@
 <template>
-  <div class="min-w-0 space-y-2">
+  <div
+    class="min-w-0"
+    :role="inline ? 'group' : undefined"
+    :aria-label="inline ? t('ui.selectApplicableModels') : undefined"
+    :class="compact ? 'space-y-1' : 'space-y-2'"
+  >
     <div class="min-w-0 space-y-2">
-      <div class="overflow-hidden rounded-lg border border-border/60 bg-background">
+      <div
+        class="overflow-hidden bg-background"
+        :class="inline ? '' : 'rounded-lg border border-border/60'"
+      >
         <button
+          v-if="!inline"
           ref="trigger"
           type="button"
-          class="flex min-h-10 w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm font-normal text-foreground transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+          class="flex w-full items-center justify-between gap-2 px-3 text-left text-sm font-normal text-foreground transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+          :class="compact ? 'min-h-8 py-1' : 'min-h-10 py-2'"
           :disabled="disabled"
-          aria-label="选择适用模型"
+          :aria-label="t('ui.selectApplicableModels')"
           :aria-expanded="open"
           :aria-controls="listId"
           @click="open ? closeModels() : openModels()"
@@ -24,22 +34,27 @@
           />
         </button>
         <div
-          v-if="open"
+          v-if="inline || open"
           :id="listId"
-          class="flex min-w-0 flex-col border-t border-border/60"
+          class="flex min-w-0 flex-col"
+          :class="inline ? '' : 'border-t border-border/60'"
           role="region"
-          aria-label="全局模型选择列表"
+          :aria-label="t('ui.globalModelSelectionList')"
           @keydown.esc.stop.prevent="closeModels"
         >
-          <div class="relative shrink-0 p-2">
+          <div
+            class="relative shrink-0 px-2"
+            :class="compact ? 'py-1.5' : 'py-2'"
+          >
             <Search class="pointer-events-none absolute left-5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               ref="searchInput"
               v-model="search"
               size="sm"
-              class="h-9 rounded-md border-border/60 bg-background pl-9 pr-3 text-sm"
-              placeholder="搜索模型名称"
-              aria-label="搜索全局模型"
+              class="rounded-md border-border/60 bg-background pl-9 pr-3 text-sm"
+              :class="compact ? 'h-8' : 'h-9'"
+              :placeholder="t('ui.searchModelNames5e72d9a')"
+              :aria-label="t('ui.searchGlobalModels')"
               :disabled="disabled"
             />
           </div>
@@ -48,7 +63,7 @@
             v-if="loading"
             class="p-6 text-center text-xs text-muted-foreground"
           >
-            正在加载全局模型
+            {{ t('ui.loadingGlobalModels') }}
           </p>
           <div
             v-else-if="error"
@@ -64,12 +79,12 @@
               :disabled="disabled"
               @click="emit('reload')"
             >
-              重试
+              {{ t('vscodex.connection.retry') }}
             </Button>
           </div>
           <template v-else>
             <div class="flex min-h-8 shrink-0 items-center justify-between gap-2 px-3 py-1 text-xs text-muted-foreground">
-              <span>指定全局模型</span>
+              <span>{{ t('ui.specifyGlobalModels') }}</span>
               <Button
                 v-if="selectableRows.length"
                 type="button"
@@ -77,19 +92,26 @@
                 size="sm"
                 class="h-6 px-1.5 text-xs font-normal"
                 :disabled="disabled"
-                :aria-label="search.trim() ? '全选搜索结果' : '选择当前列表'"
+                :aria-label="search.trim() ? t('ui.selectAllSearchResults') : t('ui.selectCurrentList')"
                 :aria-pressed="allResultsSelected"
                 @click="selectResults(!allResultsSelected)"
               >
-                {{ allResultsSelected ? '取消当前选择' : search.trim() ? '全选结果' : '全选当前' }}
+                {{ allResultsSelected ? t('ui.clearCurrentSelection') : search.trim() ? t('ui.selectAllResults') : t('ui.selectAllDisplayed') }}
               </Button>
             </div>
-            <div class="grid max-h-64 min-h-0 grid-cols-1 gap-1 overflow-y-auto overscroll-contain p-2 sm:grid-cols-2">
+            <div
+              class="grid min-h-0 grid-cols-1 gap-1 overflow-y-auto overscroll-contain px-2"
+              :class="[
+                compact ? 'max-h-48 py-1' : 'max-h-64 py-2',
+                narrow ? '' : compact ? 'sm:grid-cols-2 xl:grid-cols-3' : 'sm:grid-cols-2',
+              ]"
+            >
               <label
                 v-for="model in filteredModels"
                 :key="model.name"
-                class="flex min-w-0 items-center gap-3 rounded-md px-2 py-2 text-sm"
+                class="flex min-w-0 items-center gap-3 rounded-md px-2 text-sm"
                 :class="[
+                  compact ? 'py-1.5' : 'py-2',
                   model.owner ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-muted/50',
                   selectedModels.includes(model.name) ? 'bg-accent/60' : '',
                 ]"
@@ -97,7 +119,7 @@
                 <Checkbox
                   :checked="selectedModels.includes(model.name)"
                   :disabled="disabled || Boolean(model.owner)"
-                  :aria-label="`选择模型 ${model.name}`"
+                  :aria-label="t('models.management.selectModel', { name: model.name })"
                   @update:checked="selected => toggleModel(model.name, selected)"
                 />
                 <span class="min-w-0 flex-1">
@@ -115,8 +137,7 @@
                   <span
                     v-if="model.owner"
                     class="block text-xs text-muted-foreground"
-                  >
-                    已用于配置 {{ model.owner }}
+                  > {{ t('ui.alreadyConfigured') }} {{ model.owner }}
                   </span>
                 </span>
               </label>
@@ -124,25 +145,27 @@
                 v-if="filteredModels.length === 0"
                 class="col-span-full px-3 py-6 text-center text-xs text-muted-foreground"
               >
-                {{ search.trim() ? '未匹配到全局模型' : '暂无可选模型' }}
+                {{ search.trim() ? t('ui.noMatchingGlobalModels') : t('ui.noModelsAvailableToSelect') }}
               </p>
             </div>
           </template>
 
-          <div class="flex shrink-0 flex-wrap items-center gap-1 border-t border-border/60 p-2">
-            <span class="flex-1 text-xs text-muted-foreground">
-              已选 {{ selectedModels.length }} 个
-            </span>
+          <div
+            v-if="!inline"
+            class="flex shrink-0 flex-wrap items-center gap-1 border-t border-border/60 px-2"
+            :class="compact ? 'py-1' : 'py-2'"
+          >
+            <span class="flex-1 whitespace-nowrap text-xs text-muted-foreground"> {{ t('ui.selected') }} {{ selectedModels.length }} {{ t('ui.items3a11681') }} </span>
             <Button
               type="button"
               variant="ghost"
               size="sm"
               class="h-7 px-2 text-xs font-normal text-muted-foreground"
               :disabled="disabled || selectedModels.length === 0"
-              aria-label="清空已选"
+              :aria-label="t('ui.clearSelectionbab8a79')"
               @click="updateModels([])"
             >
-              清空已选
+              {{ narrow ? t('ui.clear1ef3de0') : t('ui.clearSelectionbab8a79') }}
             </Button>
             <Button
               type="button"
@@ -150,30 +173,27 @@
               size="sm"
               class="h-7 gap-1 px-2 text-xs font-medium"
               :disabled="disabled"
+              :aria-label="t('ui.finishSelection')"
               @click="closeModels"
             >
               <Check class="h-3.5 w-3.5" />
-              完成选择
+              {{ narrow ? t('ui.completed') : t('ui.finishSelection') }}
             </Button>
           </div>
         </div>
       </div>
     </div>
     <p
-      v-if="modelValue.length === 0"
+      v-if="modelValue.length === 0 && !inline"
       class="text-xs text-muted-foreground"
     >
-      支持多选，选中的模型共用一套调度设置。
+      {{ t('ui.selectMultipleModelsToShareTheSameSchedulingSettings') }}
     </p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, useId, watch } from 'vue'
-import { Check, ChevronDown, Search } from 'lucide-vue-next'
-import { Button, Checkbox, Input } from '@/components/ui'
-import type { GlobalModelResponse } from '@/api/global-models'
-
+import { useI18n } from '@/i18n'
 const props = defineProps<{
   modelValue: string[]
   models: GlobalModelResponse[]
@@ -181,12 +201,24 @@ const props = defineProps<{
   loading?: boolean
   error?: string | null
   disabled?: boolean
+  compact?: boolean
+  narrow?: boolean
+  /** Keep the search and model checklist mounted inside the parent card. */
+  inline?: boolean
 }>()
 
 const emit = defineEmits<{
   'update:modelValue': [models: string[]]
   reload: []
+  close: []
 }>()
+
+const { t } = useI18n()
+
+import { computed, nextTick, ref, useId, watch } from 'vue'
+import { Check, ChevronDown, Search } from 'lucide-vue-next'
+import { Button, Checkbox, Input } from '@/components/ui'
+import type { GlobalModelResponse } from '@/api/global-models'
 
 const trigger = ref<HTMLButtonElement | null>(null)
 const searchInput = ref<InstanceType<typeof Input> | null>(null)
@@ -195,9 +227,9 @@ const open = ref(props.modelValue.length === 0 && !props.disabled)
 const search = ref('')
 const selectedModels = computed(() => props.modelValue)
 const selectionLabel = computed(() => {
-  if (!props.modelValue.length) return '请选择全局模型'
+  if (!props.modelValue.length) return t('routing.selectGlobalModels')
   if (props.modelValue.length <= 2) return props.modelValue.map(modelLabel).join('、')
-  return `已选择 ${props.modelValue.length} 个模型`
+  return t('routing.selectedModelCount', { count: props.modelValue.length })
 })
 const filteredModels = computed(() => {
   const models = new Map(props.models.map(model => [model.name, {
@@ -224,13 +256,23 @@ async function openModels(): Promise<void> {
   if (props.disabled) return
   open.value = true
   await nextTick()
-  searchInput.value?.inputRef?.focus({ preventScroll: true })
+  focusSearch()
 }
 
 function closeModels(): void {
+  if (props.inline) {
+    emit('close')
+    return
+  }
   open.value = false
   trigger.value?.focus({ preventScroll: true })
 }
+
+function focusSearch(): void {
+  searchInput.value?.inputRef?.focus({ preventScroll: true })
+}
+
+defineExpose({ focusSearch })
 
 function modelLabel(name: string): string {
   return props.models.find(model => model.name === name)?.display_name || name
@@ -250,4 +292,5 @@ function selectResults(selected: boolean): void {
   const names = new Set(selectableRows.value.map(model => model.name))
   updateModels(selected ? [...new Set([...selectedModels.value, ...names])] : selectedModels.value.filter(name => !names.has(name)))
 }
+
 </script>

@@ -10,10 +10,10 @@
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
           <div class="shrink-0">
             <h3 class="text-sm sm:text-base font-semibold">
-              公告管理
+              {{ t('nav.announcements') }}
             </h3>
             <p class="text-xs text-muted-foreground mt-0.5">
-              {{ isAdmin ? '管理系统公告和通知' : '查看系统公告和通知' }}
+              {{ isAdmin ? t('ui.manageSystemAnnouncementsAndNotifications') : t('ui.viewSystemAnnouncementsAndNotifications') }}
             </p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
@@ -22,7 +22,7 @@
               variant="default"
               class="px-3 py-1"
             >
-              {{ unreadCount }} 条未读
+              {{ unreadCount }} {{ t('ui.unread') }}
             </Badge>
             <div class="hidden sm:block h-4 w-px bg-border" />
             <Button
@@ -30,7 +30,7 @@
               variant="ghost"
               size="icon"
               class="h-8 w-8"
-              title="新建公告"
+              :title="t('ui.newAnnouncement')"
               @click="openCreateDialog"
             >
               <Plus class="w-3.5 h-3.5" />
@@ -57,10 +57,10 @@
       >
         <Bell class="h-12 w-12 text-muted-foreground mb-3" />
         <h3 class="text-sm font-medium text-foreground">
-          暂无公告
+          {{ t('ui.noAnnouncements') }}
         </h3>
         <p class="text-xs text-muted-foreground mt-1">
-          系统暂时没有发布任何公告
+          {{ t('ui.noAnnouncementsHaveBeenPublishedYet') }}
         </p>
       </div>
 
@@ -72,37 +72,37 @@
           <TableHeader>
             <TableRow class="border-b border-border/60 hover:bg-transparent">
               <TableHead class="w-[80px] h-12 font-semibold text-center">
-                类型
+                {{ t('ui.typeba40014') }}
               </TableHead>
               <TableHead class="h-12 font-semibold">
-                概要
+                {{ t('ui.summary') }}
               </TableHead>
               <TableHead class="w-[120px] h-12 font-semibold">
-                发布者
+                {{ t('ui.publishedBy') }}
               </TableHead>
               <TableHead class="w-[140px] h-12 font-semibold">
-                发布时间
+                {{ t('ui.publishedAt') }}
               </TableHead>
               <TableHead class="w-[80px] h-12 font-semibold text-center">
-                状态
+                {{ t('ui.status6320b4a') }}
               </TableHead>
               <TableHead
                 v-if="isAdmin"
                 class="w-[80px] h-12 font-semibold text-center"
               >
-                置顶
+                {{ t('ui.pin') }}
               </TableHead>
               <TableHead
                 v-if="isAdmin"
                 class="w-[80px] h-12 font-semibold text-center"
               >
-                启用
+                {{ t('ui.enablef4f0ead') }}
               </TableHead>
               <TableHead
                 v-if="isAdmin"
                 class="w-[100px] h-12 font-semibold text-center"
               >
-                操作
+                {{ t('ui.actionsed31fbb') }}
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -140,7 +140,7 @@
                       variant="outline"
                       class="text-[10px] px-1.5 py-0"
                     >
-                      必读
+                      {{ popupReminderLabel }}
                     </Badge>
                     <Pin
                       v-if="announcement.is_pinned"
@@ -159,7 +159,7 @@
                 {{ announcement.author.username }}
               </TableCell>
               <TableCell class="py-4 text-xs text-muted-foreground">
-                {{ formatDate(announcement.created_at) }}
+                {{ formatTimeAgo(announcement.created_at) }}
               </TableCell>
               <TableCell class="py-4 text-center">
                 <Badge
@@ -167,14 +167,14 @@
                   variant="secondary"
                   class="text-xs px-2.5 py-0.5"
                 >
-                  已读
+                  {{ t('ui.read') }}
                 </Badge>
                 <Badge
                   v-else
                   variant="default"
                   class="text-xs px-2.5 py-0.5"
                 >
-                  未读
+                  {{ t('ui.unread4d0680f') }}
                 </Badge>
               </TableCell>
               <TableCell
@@ -261,7 +261,7 @@
                   variant="outline"
                   class="text-[10px] shrink-0"
                 >
-                  必读
+                  {{ popupReminderLabel }}
                 </Badge>
                 <Pin
                   v-if="announcement.is_pinned"
@@ -272,7 +272,7 @@
                 :variant="announcement.is_read ? 'secondary' : 'default'"
                 class="text-xs shrink-0"
               >
-                {{ announcement.is_read ? '已读' : '未读' }}
+                {{ announcement.is_read ? t('ui.read') : t('ui.unread4d0680f') }}
               </Badge>
             </div>
             <p
@@ -284,7 +284,7 @@
             <div class="flex items-center gap-2 text-xs text-muted-foreground">
               <span>{{ announcement.author.username }}</span>
               <span>·</span>
-              <span>{{ formatDate(announcement.created_at) }}</span>
+              <span>{{ formatTimeAgo(announcement.created_at) }}</span>
             </div>
             <div
               v-if="isAdmin"
@@ -292,7 +292,7 @@
               @click.stop
             >
               <div class="flex items-center gap-2">
-                <span class="text-xs text-muted-foreground">置顶</span>
+                <span class="text-xs text-muted-foreground">{{ t('ui.pin') }}</span>
                 <Switch
                   :model-value="announcement.is_pinned"
                   class="data-[state=checked]:bg-emerald-500 scale-75"
@@ -300,7 +300,7 @@
                 />
               </div>
               <div class="flex items-center gap-2">
-                <span class="text-xs text-muted-foreground">启用</span>
+                <span class="text-xs text-muted-foreground">{{ t('ui.enablef4f0ead') }}</span>
                 <Switch
                   :model-value="announcement.is_active"
                   class="data-[state=checked]:bg-primary scale-75"
@@ -355,10 +355,10 @@
             </div>
             <div class="flex-1 min-w-0">
               <h3 class="text-lg font-semibold text-foreground leading-tight">
-                {{ editingAnnouncement ? '编辑公告' : '新建公告' }}
+                {{ editingAnnouncement ? t('ui.editAnnouncement') : t('ui.newAnnouncement') }}
               </h3>
               <p class="text-xs text-muted-foreground">
-                {{ editingAnnouncement ? '修改公告内容和设置' : '发布新的系统公告' }}
+                {{ editingAnnouncement ? t('ui.editAnnouncementContentAndSettings') : t('ui.publishANewSystemAnnouncement') }}
               </p>
             </div>
           </div>
@@ -373,11 +373,11 @@
           <Label
             for="title"
             class="text-sm font-medium"
-          >标题 *</Label>
+          >{{ t('ui.title') }}</Label>
           <Input
             id="title"
             v-model="formData.title"
-            placeholder="输入公告标题"
+            :placeholder="t('ui.enterAnnouncementTitle')"
             class="h-11"
             required
           />
@@ -387,11 +387,11 @@
           <Label
             for="content"
             class="text-sm font-medium"
-          >内容 * (支持 Markdown)</Label>
+          >{{ t('ui.contentMarkdownSupported') }}</Label>
           <Textarea
             id="content"
             v-model="formData.content"
-            placeholder="输入公告内容，支持 Markdown 格式"
+            :placeholder="t('ui.enterAnnouncementContentInMarkdown')"
             rows="10"
             required
           />
@@ -402,7 +402,7 @@
             <Label
               for="type"
               class="text-sm font-medium"
-            >类型</Label>
+            >{{ t('ui.typeba40014') }}</Label>
             <Select
               v-model="formData.type"
             >
@@ -410,20 +410,20 @@
                 id="type"
                 class="h-11"
               >
-                <SelectValue placeholder="选择类型" />
+                <SelectValue :placeholder="t('ui.selectType')" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="info">
-                  信息
+                  {{ t('ui.information') }}
                 </SelectItem>
                 <SelectItem value="warning">
-                  警告
+                  {{ t('ui.warning') }}
                 </SelectItem>
                 <SelectItem value="maintenance">
-                  维护
+                  {{ t('ui.maintenance') }}
                 </SelectItem>
                 <SelectItem value="important">
-                  重要
+                  {{ t('ui.important') }}
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -433,7 +433,7 @@
             <Label
               for="priority"
               class="text-sm font-medium"
-            >优先级</Label>
+            >{{ t('ui.priority565d646') }}</Label>
             <Input
               id="priority"
               v-model.number="formData.priority"
@@ -446,7 +446,7 @@
           </div>
         </div>
 
-        <div class="flex items-center gap-6 p-3 border rounded-lg bg-muted/50">
+        <div class="flex flex-wrap items-center gap-x-6 gap-y-3 p-3 border rounded-lg bg-muted/50">
           <div class="flex items-center gap-2">
             <input
               id="pinned"
@@ -457,7 +457,7 @@
             <Label
               for="pinned"
               class="cursor-pointer text-sm"
-            >置顶公告</Label>
+            >{{ t('ui.pinAnnouncement') }}</Label>
           </div>
           <div class="flex items-center gap-2">
             <input
@@ -469,7 +469,7 @@
             <Label
               for="requires-ack"
               class="cursor-pointer text-sm"
-            >必读确认</Label>
+            >{{ popupReminderLabel }}</Label>
           </div>
           <div
             v-if="editingAnnouncement"
@@ -484,7 +484,7 @@
             <Label
               for="active"
               class="cursor-pointer text-sm"
-            >启用</Label>
+            >{{ t('ui.enablef4f0ead') }}</Label>
           </div>
         </div>
       </form>
@@ -499,7 +499,7 @@
             v-if="saving"
             class="animate-spin h-4 w-4 mr-2"
           />
-          {{ editingAnnouncement ? '保存' : '创建' }}
+          {{ editingAnnouncement ? t('ui.save') : t('ui.create') }}
         </Button>
         <Button
           variant="outline"
@@ -507,7 +507,7 @@
           class="h-10 px-5"
           @click="dialogOpen = false"
         >
-          取消
+          {{ t('common.cancel') }}
         </Button>
       </template>
     </Dialog>
@@ -516,84 +516,33 @@
     <AlertDialog
       v-model="deleteDialogOpen"
       type="danger"
-      title="确认删除"
-      :description="`确定要删除公告「${deletingAnnouncement?.title}」吗？此操作无法撤销。`"
-      confirm-text="删除"
+      :title="t('ui.confirmDeletion')"
+      :description="t('ui.deleteAnnouncementValueThisCannotBeUndone', { value: deletingAnnouncement?.title ?? '' })"
+      :confirm-text="t('ui.delete')"
       :loading="deleting"
       @confirm="deleteAnnouncement"
       @cancel="deleteDialogOpen = false"
     />
 
     <!-- 公告详情对话框 -->
-    <Dialog
+    <AnnouncementDialog
       v-model="detailDialogOpen"
-      size="lg"
-    >
-      <template #header>
-        <div class="border-b border-border px-6 py-4">
-          <div class="flex items-center gap-3">
-            <div
-              class="flex h-9 w-9 items-center justify-center rounded-lg flex-shrink-0"
-              :class="getDialogIconClass(viewingAnnouncement?.type)"
-            >
-              <component
-                :is="getAnnouncementIcon(viewingAnnouncement.type)"
-                v-if="viewingAnnouncement"
-                class="h-5 w-5"
-                :class="getIconColor(viewingAnnouncement.type)"
-              />
-            </div>
-            <div class="flex-1 min-w-0">
-              <h3 class="text-lg font-semibold text-foreground leading-tight truncate">
-                {{ viewingAnnouncement?.title || '公告详情' }}
-              </h3>
-              <p class="text-xs text-muted-foreground">
-                系统公告
-              </p>
-            </div>
-          </div>
-        </div>
-      </template>
-
-      <div
-        v-if="viewingAnnouncement"
-        class="space-y-4"
-      >
-        <div class="flex items-center gap-3 text-xs text-gray-500 dark:text-muted-foreground">
-          <span>{{ viewingAnnouncement.author.username }}</span>
-          <span>·</span>
-          <span>{{ formatFullDate(viewingAnnouncement.created_at) }}</span>
-        </div>
-
-        <!-- eslint-disable vue/no-v-html -->
-        <div
-          translate="no"
-          class="prose prose-sm dark:prose-invert max-w-none"
-          v-html="renderMarkdown(viewingAnnouncement.content)"
-        />
-        <!-- eslint-enable vue/no-v-html -->
-      </div>
-
-      <template #footer>
-        <Button
-          variant="outline"
-          type="button"
-          class="h-10 px-5"
-          @click="detailDialogOpen = false"
-        >
-          关闭
-        </Button>
-      </template>
-    </Dialog>
+      :announcement="viewingAnnouncement"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
+import { useI18n } from '@/i18n'
+const { t } = useI18n()
+
 import { getI18nLocale } from '@/i18n'
-import { formatRelativeTime } from '@/utils/format'
-import { ref, onMounted, computed } from 'vue'
+import { formatTimeAgo } from '@/utils/format'
+import { ref, onMounted, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { announcementApi, type Announcement } from '@/api/announcements'
 import { useAuthStore } from '@/stores/auth'
+import { useAnnouncementStore } from '@/stores/announcements'
 import {
   Card,
   Button,
@@ -618,20 +567,24 @@ import SelectValue from '@/components/ui/select-value.vue'
 import SelectContent from '@/components/ui/select-content.vue'
 import SelectItem from '@/components/ui/select-item.vue'
 import { AlertDialog } from '@/components/common'
+import AnnouncementDialog from '@/components/common/AnnouncementDialog.vue'
 import { Bell, AlertCircle, AlertTriangle, Info, Pin, Wrench, Loader2, Plus, SquarePen, Trash2 } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { log } from '@/utils/logger'
-import { marked } from 'marked'
-import { sanitizeMarkdown } from '@/utils/sanitize'
 
 const { success, error: showError } = useToast()
 const authStore = useAuthStore()
+const announcementStore = useAnnouncementStore()
+const route = useRoute()
+const router = useRouter()
 const isAdmin = computed(() => authStore.isAdmin)
+const popupReminderLabel = computed(() => getI18nLocale() === 'zh-CN' ? '弹窗提醒' : 'Popup reminder')
 
 const announcements = ref<Announcement[]>([])
 const loading = ref(false)
 const total = ref(0)
-const unreadCount = ref(0)
+const pageUnreadCount = ref(0)
+const unreadCount = computed(() => announcementStore.unreadCount ?? pageUnreadCount.value)
 const currentPage = ref(1)
 const pageSize = ref(20)
 
@@ -660,41 +613,63 @@ onMounted(() => {
   loadAnnouncements()
 })
 
+watch(() => route.query.create, value => {
+  if (value !== '1') return
+  if (isAdmin.value) openCreateDialog()
+  const query = { ...route.query }
+  delete query.create
+  void router.replace({ query })
+}, { immediate: true })
+
+watch([() => announcementStore.items, () => announcementStore.unreadCount], ([items, count]) => {
+  const readStates = new Map(items.map(item => [item.id, item.is_read]))
+  for (const announcement of announcements.value) {
+    if (count === 0 && isCurrentAnnouncement(announcement)) announcement.is_read = true
+    else if (readStates.has(announcement.id)) announcement.is_read = readStates.get(announcement.id)
+  }
+})
+
 async function loadAnnouncements(page = 1) {
   loading.value = true
   currentPage.value = page
   try {
-    const response = await announcementApi.getAnnouncements({
-      active_only: !authStore.canAccessAdmin, // 管理员和审计管理员可以看到所有公告
+    const params = {
       limit: pageSize.value,
       offset: (page - 1) * pageSize.value
-    })
+    }
+    const response = await announcementApi.getUserAnnouncements(params)
     announcements.value = response.items
     total.value = response.total
-    unreadCount.value = response.unread_count || 0
+    pageUnreadCount.value = response.unread_count || 0
   } catch (error) {
     log.error('加载公告失败:', error)
-    showError('加载公告失败')
+    showError(t('ui.failedToLoadAnnouncements'))
   } finally {
     loading.value = false
   }
 }
 
+function isCurrentAnnouncement(announcement: Announcement) {
+  const now = Date.now()
+  return announcement.is_active
+    && (!announcement.start_time || Date.parse(announcement.start_time) <= now)
+    && (!announcement.end_time || Date.parse(announcement.end_time) >= now)
+}
+
 async function viewAnnouncementDetail(announcement: Announcement) {
-  // 标记为已读
-  if (!announcement.is_read && !isAdmin.value) {
+  viewingAnnouncement.value = announcement
+  detailDialogOpen.value = true
+  if (!announcement.is_read && isCurrentAnnouncement(announcement)) {
     try {
-      await announcementApi.markAsRead(announcement.id)
-      announcement.is_read = true
-      unreadCount.value = Math.max(0, unreadCount.value - 1)
+      await announcementStore.markRead(announcement.id)
+      if (!announcement.is_read) {
+        announcement.is_read = true
+        pageUnreadCount.value = Math.max(0, pageUnreadCount.value - 1)
+      }
     } catch (error) {
       log.error('标记已读失败:', error)
     }
   }
-
-  // 显示详情对话框
-  viewingAnnouncement.value = announcement
-  detailDialogOpen.value = true
 }
 
 function openCreateDialog() {
@@ -731,10 +706,11 @@ async function toggleAnnouncementPin(announcement: Announcement, newStatus: bool
       is_pinned: newStatus
     })
     announcement.is_pinned = newStatus
-    success(newStatus ? '已置顶' : '已取消置顶')
+    success(newStatus ? t('ui.pinned') : t('ui.unpinned'))
+    void announcementStore.refresh()
   } catch (error) {
     log.error('更新置顶状态失败:', error)
-    showError('更新置顶状态失败')
+    showError(t('ui.failedToUpdatePinStatus'))
   }
 }
 
@@ -744,16 +720,17 @@ async function toggleAnnouncementActive(announcement: Announcement, newStatus: b
       is_active: newStatus
     })
     announcement.is_active = newStatus
-    success(newStatus ? '已启用' : '已禁用')
+    success(newStatus ? t('ui.enableddfb8022') : t('ui.disabledbc5a87a'))
+    void announcementStore.refresh()
   } catch (error) {
     log.error('更新启用状态失败:', error)
-    showError('更新启用状态失败')
+    showError(t('ui.failedToUpdateEnabledStatus'))
   }
 }
 
 async function saveAnnouncement() {
   if (!formData.value.title || !formData.value.content) {
-    showError('请填写标题和内容')
+    showError(t('ui.enterATitleAndContent'))
     return
   }
 
@@ -762,17 +739,18 @@ async function saveAnnouncement() {
     if (editingAnnouncement.value) {
       // 更新
       await announcementApi.updateAnnouncement(editingAnnouncement.value.id, formData.value)
-      success('公告更新成功')
+      success(t('ui.announcementUpdated'))
     } else {
       // 创建
       await announcementApi.createAnnouncement(formData.value)
-      success('公告创建成功')
+      success(t('ui.announcementCreated'))
     }
     dialogOpen.value = false
+    void announcementStore.refresh()
     loadAnnouncements(currentPage.value)
   } catch (error) {
     log.error('保存失败:', error)
-    showError('保存失败')
+    showError(t('ui.failedToSave'))
   } finally {
     saving.value = false
   }
@@ -789,12 +767,13 @@ async function deleteAnnouncement() {
   deleting.value = true
   try {
     await announcementApi.deleteAnnouncement(deletingAnnouncement.value.id)
-    success('公告已删除')
+    success(t('ui.announcementDeleted'))
     deleteDialogOpen.value = false
+    void announcementStore.refresh()
     loadAnnouncements(currentPage.value)
   } catch (error) {
     log.error('删除失败:', error)
-    showError('删除失败')
+    showError(t('ui.deletionFailed'))
   } finally {
     deleting.value = false
   }
@@ -842,43 +821,14 @@ function getTypeTextColor(type: string): string {
 function getTypeLabel(type: string): string {
   switch (type) {
     case 'important':
-      return '重要'
+      return t('ui.important')
     case 'warning':
-      return '警告'
+      return t('ui.warning')
     case 'maintenance':
-      return '维护'
+      return t('ui.maintenance')
     default:
-      return '信息'
+      return t('ui.information')
   }
-}
-
-function getDialogIconClass(type?: string) {
-  switch (type) {
-    case 'important':
-      return 'bg-rose-100 dark:bg-rose-900/30'
-    case 'warning':
-      return 'bg-amber-100 dark:bg-amber-900/30'
-    case 'maintenance':
-      return 'bg-orange-100 dark:bg-orange-900/30'
-    default:
-      return 'bg-primary/10 dark:bg-primary/20'
-  }
-}
-
-function formatFullDate(dateString: string): string {
-  const date = new Date(dateString)
-  return date.toLocaleDateString(getI18nLocale(), {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
-}
-
-function renderMarkdown(content: string): string {
-  const rawHtml = marked(content) as string
-  return sanitizeMarkdown(rawHtml)
 }
 
 function getPlainText(content: string): string {
@@ -890,28 +840,6 @@ function getPlainText(content: string): string {
     .substring(0, 200)
 }
 
-function formatDate(dateString: string): string {
-  const date = new Date(dateString)
-  const now = new Date()
-  const diff = now.getTime() - date.getTime()
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24))
-  const hours = Math.floor(diff / (1000 * 60 * 60))
-  const minutes = Math.floor(diff / (1000 * 60))
-
-  if (minutes < 60) {
-    return minutes < 1 ? formatRelativeTime(0, 'second') : formatRelativeTime(-minutes, 'minute')
-  } else if (hours < 24) {
-    return formatRelativeTime(-hours, 'hour')
-  } else if (days < 7) {
-    return formatRelativeTime(-days, 'day')
-  } else {
-    return date.toLocaleDateString(getI18nLocale(), {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    })
-  }
-}
 </script>
 
 <style scoped>

@@ -614,11 +614,8 @@ mod tests {
             "Bearer sk-typesafe".parse().unwrap(),
         );
 
-        let extracted = extract_request_credentials(
-            &headers,
-            &uri("/v1/systemone"),
-            "typesafe:systemone",
-        );
+        let extracted =
+            extract_request_credentials(&headers, &uri("/v1/systemone"), "typesafe:systemone");
         assert_eq!(
             extracted.primary,
             Some(GatewayPrimaryCredential::ProviderApiKey {

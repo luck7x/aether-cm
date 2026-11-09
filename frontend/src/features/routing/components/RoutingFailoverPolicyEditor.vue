@@ -1,43 +1,49 @@
 <template>
   <section
-    class="space-y-4 rounded-lg border border-border/60 p-4"
+    class="min-w-0 space-y-4"
+    :class="{ 'rounded-lg border border-border/60 p-4': !sidebar }"
     data-testid="routing-failover-policy"
   >
     <div>
       <h3 class="text-sm font-medium">
-        故障转移规则
+        {{ t('ui.failoverRules') }}
       </h3>
-      <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
-        作用于当前调度策略的所有提供商。先检查全局规则，再检查提供商自身规则；业务内容输出后不再重放请求。
-      </p>
     </div>
-    <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-      <label class="space-y-1.5 text-sm">
-        <span>全局最大转移次数</span>
+    <div
+      class="grid min-w-0 gap-3"
+      :class="sidebar ? 'grid-cols-2' : 'grid-cols-1 md:grid-cols-2'"
+    >
+      <label
+        class="min-w-0 space-y-1.5"
+        :class="sidebar ? 'text-xs' : 'text-sm'"
+      >
+        <span>{{ t('ui.globalMaximumFailovers') }}</span>
         <Input
           :model-value="modelValue.max_transfer_count"
           :disabled="disabled"
           type="number"
           min="0"
           step="1"
-          aria-label="全局最大转移次数"
+          :aria-label="t('ui.globalMaximumFailovers')"
           @update:model-value="updateLimit('max_transfer_count', $event)"
         />
-        <span class="block text-xs leading-relaxed text-muted-foreground">0 不限制。首次尝试和粘性同 Key 重试不计入；每次切换候选计 1 次。</span>
       </label>
-      <label class="space-y-1.5 text-sm">
-        <span>全局最大转移时间（秒）</span>
+      <label
+        class="min-w-0 space-y-1.5"
+        :class="sidebar ? 'text-xs' : 'text-sm'"
+      >
+        <span>{{ t('ui.globalMaximumFailoverTimeSeconds') }}</span>
         <Input
           :model-value="modelValue.max_transfer_timeout_seconds"
           :disabled="disabled"
           type="number"
           min="0"
           step="1"
-          aria-label="全局最大转移时间"
+          :aria-label="t('ui.globalMaximumFailoverTime')"
           @update:model-value="updateLimit('max_transfer_timeout_seconds', $event)"
         />
-        <span class="block text-xs leading-relaxed text-muted-foreground">0 不限制。从首次尝试累计，耗尽后不再启动下一次尝试；不会中断已开始的调用，单次超时仍独立生效。</span>
       </label>
+      <slot name="limits-extra" />
     </div>
     <div
       v-for="section in ruleSections"
@@ -49,9 +55,6 @@
           <h4 class="text-sm font-medium">
             {{ section.title }}
           </h4>
-          <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
-            {{ section.description }}
-          </p>
         </div>
         <div class="flex shrink-0 items-center gap-1">
           <Button
@@ -60,12 +63,12 @@
             size="sm"
             class="h-7 px-2 text-xs"
             :disabled="disabled"
-            :title="jsonMode[section.key] ? `切回${section.title}表单` : `切到${section.title} JSON`"
-            :aria-label="jsonMode[section.key] ? `切回${section.title}表单` : `切到${section.title} JSON`"
+            :title="jsonMode[section.key] ? t('ui.switchBackToTheValueForm', { value: section.title }) : t('ui.switchToValueJson', { value: section.title })"
+            :aria-label="jsonMode[section.key] ? t('ui.switchBackToTheValueForm', { value: section.title }) : t('ui.switchToValueJson', { value: section.title })"
             @click="toggleJsonMode(section.key)"
           >
             <Code2 class="mr-1 h-3 w-3" />
-            {{ jsonMode[section.key] ? '表单' : 'JSON' }}
+            {{ jsonMode[section.key] ? t('ui.form') : 'JSON' }}
           </Button>
           <Button
             v-if="jsonMode[section.key]"
@@ -74,11 +77,11 @@
             size="sm"
             class="h-7 px-2 text-xs"
             :disabled="disabled"
-            :title="`格式化${section.title} JSON`"
-            :aria-label="`格式化${section.title} JSON`"
+            :title="t('ui.formatValueJson', { value: section.title })"
+            :aria-label="t('ui.formatValueJson', { value: section.title })"
             @click="formatJsonDraft(section.key)"
           >
-            <AlignLeft class="mr-1 h-3 w-3" />格式化
+            <AlignLeft class="mr-1 h-3 w-3" />{{ t('ui.formatf69273d') }}
           </Button>
           <Button
             v-if="!jsonMode[section.key]"
@@ -87,10 +90,10 @@
             size="sm"
             class="h-7 px-2 text-xs"
             :disabled="disabled || modelValue.failover_rules[section.key].length >= MAX_ROUTING_FAILOVER_RULES"
-            :aria-label="`添加${section.title}`"
+            :aria-label="t('ui.addValue', { value: section.title })"
             @click="addRule(section.key)"
           >
-            <Plus class="mr-1 h-3 w-3" />添加
+            <Plus class="mr-1 h-3 w-3" />{{ t('ui.add') }}
           </Button>
         </div>
       </div>
@@ -115,7 +118,7 @@
           {{ jsonError[section.key] }}
         </div>
         <p class="text-xs text-muted-foreground">
-          仅管理{{ section.title }}；JSON 应为数组，<code class="rounded bg-muted px-1">pattern</code>{{ section.key === 'success_failover_patterns' ? ' 必填。' : ' 和 status_codes 至少填写一个。' }}
+          {{ t('ui.managesOnly') }}{{ section.title }}{{ t('ui.jsonMustBeAnArrayAnd') }}<code class="rounded bg-muted px-1">pattern</code>{{ section.key === 'success_failover_patterns' ? " " + t('ui.isRequired') : " " + t('ui.orStatusCodesMustBeProvided') }}
         </p>
       </div>
       <template v-else>
@@ -123,23 +126,24 @@
           v-if="modelValue.failover_rules[section.key].length === 0"
           class="rounded-md border border-dashed p-3 text-xs text-muted-foreground"
         >
-          暂无规则
+          {{ t('ui.noRules') }}
         </p>
         <div
           v-for="(rule, index) in modelValue.failover_rules[section.key]"
           :key="index"
           class="grid min-w-0 grid-cols-[minmax(0,1fr)_2rem] items-start gap-2"
-          :class="section.key === 'error_stop_patterns' ? 'sm:grid-cols-[10rem_minmax(0,1fr)_2rem]' : ''"
+          :class="section.key === 'error_stop_patterns' && !sidebar ? 'sm:grid-cols-[10rem_minmax(0,1fr)_2rem]' : ''"
         >
           <Input
             v-if="section.key === 'error_stop_patterns'"
             :model-value="statusDrafts[index] ?? rule.status_codes.join(', ')"
             :disabled="disabled"
             size="sm"
-            class="col-span-2 min-w-0 w-full font-mono text-xs sm:col-span-1"
-            :aria-label="`终止规则 ${index + 1} 状态码`"
-            placeholder="400, 413（选填）"
-            title="状态码用逗号或空格分隔；留空则匹配全部错误状态"
+            class="col-span-2 min-w-0 w-full font-mono text-xs"
+            :class="{ 'sm:col-span-1': !sidebar }"
+            :aria-label="t('ui.stopRuleValueStatusCodes', { value: index + 1 })"
+            :placeholder="t('ui.400413Optional')"
+            :title="t('ui.separateStatusCodesWithCommasOrSpacesLeaveBlankTo')"
             @update:model-value="updateStatuses(index, String($event))"
           />
           <Input
@@ -147,8 +151,8 @@
             :disabled="disabled"
             size="sm"
             class="min-w-0 flex-1 font-mono text-xs"
-            :aria-label="`${section.title} ${index + 1} 正则`"
-            :placeholder="section.key === 'success_failover_patterns' ? '(?i)capacity.*exhausted' : '正则内容（选填）'"
+            :aria-label="t('ui.valueValueRegex', { value: section.title, value2: index + 1 })"
+            :placeholder="section.key === 'success_failover_patterns' ? '(?i)capacity.*exhausted' : t('ui.regexPatternOptional3a9e31f')"
             @update:model-value="updateRule(section.key, index, { pattern: String($event) })"
           />
           <Button
@@ -157,7 +161,7 @@
             size="sm"
             class="h-8 w-8 shrink-0 p-0"
             :disabled="disabled"
-            :aria-label="`删除${section.title} ${index + 1}`"
+            :aria-label="t('ui.deleteValueValue', { value: section.title, value2: index + 1 })"
             @click="removeRule(section.key, index)"
           >
             <Trash2 class="h-3.5 w-3.5" />
@@ -165,9 +169,6 @@
         </div>
       </template>
     </div>
-    <p class="text-xs text-muted-foreground">
-      正则支持 (?i) 忽略大小写；服务端在保存时校验语法。每组最多 64 条，每条正则最多 4096 字节。
-    </p>
     <p
       v-if="validationError"
       role="alert"
@@ -179,6 +180,16 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from '@/i18n'
+const props = defineProps<{ modelValue: RoutingFailoverPolicy, disabled?: boolean, sidebar?: boolean }>()
+
+const emit = defineEmits<{
+  'update:modelValue': [value: RoutingFailoverPolicy]
+  'pending-change': [value: boolean]
+}>()
+
+const { t } = useI18n()
+
 import { computed, reactive, ref, watch } from 'vue'
 import { AlignLeft, Code2, Plus, Trash2 } from 'lucide-vue-next'
 import { Button, Input, Textarea } from '@/components/ui'
@@ -191,11 +202,6 @@ import {
   type RoutingFailoverRules,
 } from '../utils/routingFailover'
 
-const props = defineProps<{ modelValue: RoutingFailoverPolicy, disabled?: boolean }>()
-const emit = defineEmits<{
-  'update:modelValue': [value: RoutingFailoverPolicy]
-  'pending-change': [value: boolean]
-}>()
 type RuleSection = 'success_failover_patterns' | 'error_stop_patterns'
 const jsonMode = reactive<Record<RuleSection, boolean>>({
   success_failover_patterns: false,
@@ -214,9 +220,9 @@ const jsonDirty = reactive<Record<RuleSection, boolean>>({
   error_stop_patterns: false,
 })
 const statusDrafts = ref<Record<number, string>>({})
-const ruleSections: Array<{ key: RuleSection, title: string, description: string }> = [
-  { key: 'success_failover_patterns', title: '成功转移规则', description: 'HTTP 200 的响应体或流式输出前的缓冲内容命中正则时，放弃当前候选并继续转移；不是对所有 200 都重试。' },
-  { key: 'error_stop_patterns', title: '错误终止规则', description: '状态码与正则同时满足时立即终止。可只填状态码，或只填正则匹配全部 400–599 错误；对流内错误使用解析后的错误状态。' },
+const ruleSections: Array<{ key: RuleSection, title: string }> = [
+  { key: 'success_failover_patterns', get title() { return t('ui.successfulResponseFailoverRules') } },
+  { key: 'error_stop_patterns', get title() { return t('ui.errorTerminationRules') } },
 ]
 const validationError = computed(() => {
   const rules = errorRulesFromForm()
@@ -263,12 +269,12 @@ function updateJsonDraft(section: RuleSection, value: string) {
 
 function parseJsonStatusCodes(value: unknown, section: RuleSection, index: number): number[] | string {
   if (value === undefined || value === null) return []
-  if (!Array.isArray(value)) return `${section} 第 ${index + 1} 条的 status_codes 必须是数组`
+  if (!Array.isArray(value)) return t('routing.validation.statusArray', { section, index: index + 1 })
   const statusCodes: number[] = []
   for (const status of value) {
-    if (!Number.isInteger(status)) return `${section} 第 ${index + 1} 条的 status_codes 只能包含整数`
+    if (!Number.isInteger(status)) return t('routing.validation.statusIntegers', { section, index: index + 1 })
     if (section === 'success_failover_patterns' ? status !== 200 : status < 400 || status > 599) {
-      return `${section} 第 ${index + 1} 条的 status_codes 包含无效状态码`
+      return t('routing.validation.invalidStatus', { section, index: index + 1 })
     }
     if (!statusCodes.includes(status)) statusCodes.push(status)
   }
@@ -280,7 +286,7 @@ function parseJsonRules(section: RuleSection, draft: string): RoutingFailoverRul
   try {
     parsed = JSON.parse(draft.trim() || '[]')
   } catch (error) {
-    return error instanceof Error ? error.message : 'JSON 格式无效'
+    return error instanceof Error ? error.message : t('ui.invalidJsonFormat')
   }
 
   let entries: unknown = parsed
@@ -292,26 +298,28 @@ function parseJsonRules(section: RuleSection, draft: string): RoutingFailoverRul
       : root
     entries = source[section]
   }
-  if (!Array.isArray(entries)) return `${section} JSON 必须是数组`
-  if (entries.length > MAX_ROUTING_FAILOVER_RULES) return `${section} 最多 ${MAX_ROUTING_FAILOVER_RULES} 条`
+  if (!Array.isArray(entries)) return t('routing.validation.jsonArray', { section })
+  if (entries.length > MAX_ROUTING_FAILOVER_RULES) return t('routing.validation.tooManyRules', { name: section, count: MAX_ROUTING_FAILOVER_RULES })
 
   const rules: RoutingFailoverRule[] = []
   for (const [index, entry] of entries.entries()) {
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-      return `${section} 第 ${index + 1} 条必须是对象`
+      return t('routing.validation.ruleObject', { section, index: index + 1 })
     }
     const rawRule = entry as Record<string, unknown>
     if (rawRule.pattern !== undefined && typeof rawRule.pattern !== 'string') {
-      return `${section} 第 ${index + 1} 条的 pattern 必须是字符串`
+      return t('routing.validation.patternString', { section, index: index + 1 })
     }
     const pattern = typeof rawRule.pattern === 'string' ? rawRule.pattern.trim() : ''
     if (new TextEncoder().encode(pattern).length > MAX_ROUTING_FAILOVER_PATTERN_BYTES) {
-      return `${section} 第 ${index + 1} 条正则过长`
+      return t('routing.validation.patternTooLong', { name: section, index: index + 1 })
     }
     const statusCodes = parseJsonStatusCodes(rawRule.status_codes, section, index)
     if (typeof statusCodes === 'string') return statusCodes
     if (!pattern && (section === 'success_failover_patterns' || statusCodes.length === 0)) {
-      return `${section} 第 ${index + 1} 条需要${section === 'success_failover_patterns' ? '正则表达式' : '状态码或正则表达式'}`
+      return section === 'success_failover_patterns'
+        ? t('routing.validation.patternRequired', { name: section, index: index + 1 })
+        : t('routing.validation.statusOrPatternRequired', { name: section, index: index + 1 })
     }
     rules.push({ pattern, status_codes: statusCodes })
   }
@@ -376,7 +384,7 @@ function updateStatuses(index: number, value: string | number) {
 function parseStatusInput(value: string, index: number): number[] | string {
   const parts = value.trim().split(/[,，\s]+/).filter(Boolean)
   if (parts.some(part => !/^\d{3}$/.test(part) || Number(part) < 400 || Number(part) > 599)) {
-    return `错误终止规则第 ${index + 1} 条状态码必须为 400–599，多个状态码用逗号或空格分隔`
+    return t('routing.validation.formStatusCodes', { index: index + 1 })
   }
   return [...new Set(parts.map(Number))]
 }
@@ -432,4 +440,5 @@ function commitJsonDrafts(): boolean {
 }
 
 defineExpose({ commitJsonDrafts })
+
 </script>

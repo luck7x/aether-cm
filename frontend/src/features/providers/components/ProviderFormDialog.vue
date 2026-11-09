@@ -1,8 +1,8 @@
 <template>
   <Dialog
     :model-value="internalOpen"
-    :title="legacyT(isEditMode ? '编辑提供商' : '添加提供商')"
-    :description="legacyT(isEditMode ? '更新提供商配置。API 端点和密钥需在详情页面单独管理。' : '创建新的提供商配置。创建后可以为其添加 API 端点和密钥。')"
+    :title="isEditMode ? t('ui.editProvider') : t('guide.nav.concepts.addProvider')"
+    :description="isEditMode ? t('ui.updateProviderConfigurationApiEndpointsAndKeysAreManagedSeparately') : t('ui.createANewProviderConfigurationYouCanAddApiEndpoints')"
     :icon="isEditMode ? SquarePen : Server"
     size="xl"
     @update:model-value="handleDialogUpdate"
@@ -11,42 +11,48 @@
       class="space-y-5"
       @submit.prevent="handleSubmit"
     >
+      <p
+        v-if="!isEditMode && routingGroupId"
+        class="rounded-lg bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
+      >
+        {{ t('ui.theNewProviderIsEnabledOnlyIn') }}{{ routingGroupName || t('ui.theCurrentPolicyGroup') }}{{ t('ui.andIsDisabledByDefaultInOtherPolicyGroups') }}
+      </p>
       <!-- 基本信息 -->
       <div class="space-y-3">
         <h3 class="text-sm font-medium border-b pb-2">
-          {{ legacyT('基本信息') }}
+          {{ t('ui.basicInformation') }}
         </h3>
 
         <div class="space-y-1.5">
-          <Label for="name">{{ legacyT('名称 *') }}</Label>
+          <Label for="name">{{ t('ui.name') }}</Label>
           <Input
             id="name"
             v-model="form.name"
-            :placeholder="legacyT('例如: OpenAI 主账号')"
+            :placeholder="t('ui.exampleOpenaiPrimaryAccount')"
           />
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div class="space-y-1.5">
-            <Label>{{ legacyT('提供商类型') }}</Label>
+            <Label>{{ t('ui.providerType1103e74') }}</Label>
             <Select
               v-model="form.provider_type"
               :disabled="isEditMode"
             >
               <SelectTrigger>
-                <SelectValue :placeholder="legacyT('请选择')" />
+                <SelectValue :placeholder="t('ui.selectda590a8')" />
               </SelectTrigger>
               <SelectContent>
                 <!-- 新建模式：允许自定义及各反代类型 -->
                 <template v-if="!isEditMode">
                   <SelectItem value="custom">
-                    {{ legacyT('自定义') }}
+                    {{ t('ui.custom4eafa9e') }}
                   </SelectItem>
                   <SelectItem value="vertex_ai">
                     Vertex AI
                   </SelectItem>
                   <SelectItem value="claude_code">
-                    {{ legacyT('Claude Code（实验性功能）') }}
+                    {{ t('ui.claudeCodeExperimentalFeature') }}
                   </SelectItem>
                   <SelectItem value="codex">
                     Codex
@@ -76,13 +82,13 @@
                 <!-- 编辑模式：显示所有类型（兼容已有数据） -->
                 <template v-else>
                   <SelectItem value="custom">
-                    {{ legacyT('自定义') }}
+                    {{ t('ui.custom4eafa9e') }}
                   </SelectItem>
                   <SelectItem value="vertex_ai">
                     Vertex AI
                   </SelectItem>
                   <SelectItem value="claude_code">
-                    {{ legacyT('Claude Code（实验性功能）') }}
+                    {{ t('ui.claudeCodeExperimentalFeature') }}
                   </SelectItem>
                   <SelectItem value="codex">
                     Codex
@@ -115,15 +121,15 @@
               v-if="!isEditMode && form.provider_type !== 'custom'"
               class="text-xs text-muted-foreground"
             >
-              {{ legacyT('反代使用固定端点且不可修改') }}
+              {{ t('ui.reverseProxyProvidersUseFixedEndpointsThatCannotBeModified') }}
             </p>
           </div>
           <div class="space-y-1.5">
-            <Label for="website">{{ legacyT('主站链接') }}</Label>
+            <Label for="website">{{ t('ui.websiteUrl') }}</Label>
             <Input
               id="website"
               v-model="form.website"
-              :placeholder="legacyT('https://example.com（可选）')"
+              :placeholder="t('ui.httpsExampleComOptional')"
             />
           </div>
         </div>
@@ -132,15 +138,15 @@
       <!-- 请求配置 -->
       <div class="space-y-3">
         <h3 class="text-sm font-medium border-b pb-2">
-          {{ legacyT('请求配置') }}
+          {{ t('ui.requestConfig') }}
         </h3>
 
         <!-- 超时配置 -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div class="space-y-1.5">
             <Label>
-              {{ legacyT('流式首字节超时') }}
-              <span class="text-xs text-muted-foreground">{{ legacyT('(秒)') }}</span>
+              {{ t('ui.streamingFirstByteTimeouta94bd47') }}
+              <span class="text-xs text-muted-foreground">{{ t('ui.seconds') }}</span>
             </Label>
             <Input
               :model-value="form.stream_first_byte_timeout ?? ''"
@@ -154,8 +160,8 @@
           </div>
           <div class="space-y-1.5">
             <Label>
-              {{ legacyT('非流式请求超时') }}
-              <span class="text-xs text-muted-foreground">{{ legacyT('(秒)') }}</span>
+              {{ t('ui.nonStreamingRequestTimeoutc0f0f63') }}
+              <span class="text-xs text-muted-foreground">{{ t('ui.seconds') }}</span>
             </Label>
             <Input
               :model-value="form.request_timeout ?? ''"
@@ -176,7 +182,7 @@
               for="max-transfer-count"
               class="text-xs sm:text-sm"
             >
-              {{ legacyT('最大转移次数') }}
+              {{ t('ui.maxTransfers') }}
             </Label>
             <Input
               id="max-transfer-count"
@@ -184,7 +190,7 @@
               type="number"
               min="0"
               step="1"
-              :placeholder="legacyT('0 (不限制)')"
+              :placeholder="t('ui.0Unlimited5eb4cbb')"
               @update:model-value="(v) => form.max_transfer_count = parseNumberInput(v, { min: 0 }) ?? 0"
             />
           </div>
@@ -193,8 +199,8 @@
               for="max-transfer-timeout-seconds"
               class="text-xs sm:text-sm"
             >
-              {{ legacyT('最大转移超时') }}
-              <span class="text-xs text-muted-foreground">{{ legacyT('(秒)') }}</span>
+              {{ t('ui.maxTransferTimeout') }}
+              <span class="text-xs text-muted-foreground">{{ t('ui.seconds') }}</span>
             </Label>
             <Input
               id="max-transfer-timeout-seconds"
@@ -202,7 +208,7 @@
               type="number"
               min="0"
               step="1"
-              :placeholder="legacyT('0 (不限制)')"
+              :placeholder="t('ui.0Unlimited5eb4cbb')"
               @update:model-value="(v) => form.max_transfer_timeout_seconds = parseNumberInput(v, { min: 0 }) ?? 0"
             />
           </div>
@@ -212,14 +218,14 @@
       <!-- 功能开关 -->
       <div class="space-y-3">
         <h3 class="text-sm font-medium border-b pb-2">
-          {{ legacyT('功能开关') }}
+          {{ t('ui.featureToggles') }}
         </h3>
 
         <div class="flex items-center justify-between p-3 border rounded-lg bg-muted/50">
           <div class="space-y-0.5">
-            <span class="text-sm font-medium">{{ legacyT('号池调度模式') }}</span>
+            <span class="text-sm font-medium">{{ t('ui.poolSchedulingMode') }}</span>
             <p class="text-xs text-muted-foreground">
-              {{ legacyT('启用后该提供商的密钥将由号池统一调度') }}
+              {{ t('ui.whenEnabledThisProviderSKeysAreScheduledByThe') }}
             </p>
           </div>
           <Switch
@@ -233,9 +239,9 @@
           class="flex items-center justify-between p-3 border rounded-lg bg-muted/50"
         >
           <div class="space-y-0.5">
-            <span class="text-sm font-medium">{{ legacyT('模拟缓存模式') }}</span>
+            <span class="text-sm font-medium">{{ t('ui.simulatedCacheMode') }}</span>
             <p class="text-xs text-muted-foreground leading-relaxed">
-              {{ legacyT('启用后仅对 Kiro 请求模拟 prompt cache 读写计量。') }}
+              {{ t('ui.whenEnabledOnlyKiroRequestsSimulatePromptCacheReadWrite') }}
             </p>
           </div>
           <Switch
@@ -250,20 +256,26 @@
           data-testid="codex-fingerprint-convergence-setting"
         >
           <div class="space-y-0.5">
-            <Label
-              for="codex-fingerprint-convergence"
-              class="text-sm font-medium"
-            >
-              {{ legacyT('Codex 指纹收敛') }}
-            </Label>
+            <div class="flex items-center gap-1">
+              <Label
+                for="codex-fingerprint-convergence"
+                class="text-sm font-medium"
+              >
+                {{ t('ui.codexFingerprintConvergenceRecommended') }}
+              </Label>
+              <HelpHint
+                :label="t('ui.codexFingerprintConvergenceRecommended')"
+                :text="t('ui.whenEnabledAetherGeneratesAndWritesConsistentIdentifiersForOutbound')"
+              />
+            </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
-              {{ legacyT('统一同一 Codex 身份的设备与会话标识；关闭时保持现有透传行为。') }}
+              {{ t('ui.useConsistentDeviceAndSessionIdentifiersForTheSameCodex') }}
             </p>
           </div>
           <Switch
             id="codex-fingerprint-convergence"
             :model-value="form.codex_fingerprint_convergence_enabled"
-            :aria-label="legacyT('Codex 指纹收敛')"
+            :aria-label="t('ui.codexFingerprintConvergenceRecommended')"
             @update:model-value="(v: boolean) => form.codex_fingerprint_convergence_enabled = v"
           />
         </div>
@@ -277,25 +289,25 @@
               for="responses-websocket-enabled"
               class="text-sm font-medium"
             >
-              {{ legacyT('Responses WebSocket 模式') }}
+              {{ t('ui.responsesWebsocketMode') }}
             </Label>
             <p class="text-xs text-muted-foreground leading-relaxed">
-              {{ legacyT('允许此提供商处理标准 Responses API WebSocket 请求。仅在已验证兼容性后启用。') }}
+              {{ t('ui.allowThisProviderToHandleStandardResponsesApiWebsocketRequests') }}
             </p>
           </div>
           <Switch
             id="responses-websocket-enabled"
             :model-value="form.responses_websocket_enabled"
-            :aria-label="legacyT('Responses WebSocket 模式')"
+            :aria-label="t('ui.responsesWebsocketMode')"
             @update:model-value="(v: boolean) => form.responses_websocket_enabled = v"
           />
         </div>
 
         <div class="flex items-center justify-between gap-4 p-3 border rounded-lg bg-muted/50">
           <div class="space-y-0.5">
-            <span class="text-sm font-medium">{{ legacyT('敏感信息保护') }}</span>
+            <span class="text-sm font-medium">{{ t('ui.sensitiveInformationProtection') }}</span>
             <p class="text-xs text-muted-foreground leading-relaxed">
-              {{ legacyT('请前往模块管理-敏感信息保护中配置详细规则。') }}
+              {{ t('ui.configureDetailedRulesInModulesSensitiveInformationProtection') }}
             </p>
           </div>
         </div>
@@ -309,7 +321,7 @@
         :disabled="loading"
         @click="handleCancel"
       >
-        {{ legacyT('取消') }}
+        {{ t('common.cancel') }}
       </Button>
       <Button
         :disabled="loading || !form.name"
@@ -336,6 +348,7 @@ import {
   Switch,
 } from '@/components/ui'
 import { Server, SquarePen } from 'lucide-vue-next'
+import HelpHint from '@/components/common/HelpHint.vue'
 import { useToast } from '@/composables/useToast'
 import { useFormDialog } from '@/composables/useFormDialog'
 import { useI18n } from '@/i18n'
@@ -352,6 +365,8 @@ import { parseNumberInput } from '@/utils/form'
 const props = defineProps<{
   modelValue: boolean
   provider?: ProviderWithEndpointsSummary | null  // 编辑模式时传入
+  routingGroupId?: string
+  routingGroupName?: string
   maxPriority?: number  // 当前已有的最大优先级值
 }>()
 
@@ -361,8 +376,10 @@ const emit = defineEmits<{
   'providerUpdated': [provider: ProviderWithEndpointsSummary]
 }>()
 
+const { t } = useI18n()
+
 const { success, error: showError } = useToast()
-const { legacyT } = useI18n()
+
 const loading = ref(false)
 
 // 内部状态
@@ -378,9 +395,9 @@ const defaultPriority = computed(() => {
 
 const submitLabel = computed(() => {
   if (loading.value) {
-    return legacyT(isEditMode.value ? '保存中...' : '创建中...')
+    return isEditMode.value ? t('ui.saving') : t('ui.creating')
   }
-  return legacyT(isEditMode.value ? '保存' : '创建')
+  return isEditMode.value ? t('ui.save') : t('ui.create')
 })
 
 // 表单数据
@@ -539,19 +556,19 @@ const handleSubmit = async () => {
         ...basePayload,
         provider_priority: form.value.provider_priority,
       })
-      success(legacyT('提供商更新成功'))
+      success(t('ui.providerUpdated'))
       emit('providerUpdated', updated)
     } else {
       // 创建提供商（优先级由后端自动置顶）
-      await createProvider(basePayload)
-      success(legacyT('提供商已创建，请继续添加端点和密钥，或在优先级管理中调整顺序'), legacyT('创建成功'))
+      await createProvider({ ...basePayload, routing_group_id: props.routingGroupId })
+      success(t('ui.providerCreatedYouCanAddEndpointsAndKeysAndAdjust'), t('ui.createdSuccessfully'))
       emit('providerCreated')
     }
 
     emit('update:modelValue', false)
   } catch (error: unknown) {
-    const action = isEditMode.value ? '更新' : '创建'
-    showError(parseApiError(error, legacyT(`${action}提供商失败`)), legacyT(`${action}失败`))
+    const action = isEditMode.value ? t('ui.update') : t('ui.create')
+    showError(parseApiError(error, t('ui.failedToValueProvider', { value: action })), t('ui.failedToValue', { value: action }))
   } finally {
     loading.value = false
   }

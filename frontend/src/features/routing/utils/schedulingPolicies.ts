@@ -1,7 +1,10 @@
+import { translate as t } from '@/i18n'
+
 import {
   DEFAULT_ROUTING_POLICY_MODEL,
   SCHEDULING_POLICY_RULE_PREFIX,
   createEmptyModelPolicy,
+  getDefaultModelPolicy,
   getModelPolicy,
   getModelScheduling,
   isGeneratedModelSchedulingRule,
@@ -28,13 +31,29 @@ export interface SchedulingPolicy {
   rule?: RoutingRule
 }
 
+/** Retain legacy ranking data while making provider order the only scheduling dimension. */
+export function normalizeProviderSchedulingConfig(config: Partial<RoutingGroupConfig> | null | undefined): RoutingGroupConfig {
+  const next = normalizeRoutingGroupConfig(config)
+  next.default_policy.priority_mode = 'provider'
+  next.rules = next.rules.map(rule => ({
+    ...rule,
+    actions: rule.actions.map(action => {
+      if (!action || typeof action !== 'object') return action
+      const value = action as Record<string, unknown>
+      if (value.type !== 'set_scheduling' || value.priority_mode == null || value.priority_mode === 'provider') return action
+      return { ...value, priority_mode: 'provider' }
+    }),
+  }))
+  return next
+}
+
 export function createSchedulingPolicy(config: RoutingGroupConfig, scope: SchedulingPolicy['scope'] = 'selected'): SchedulingPolicy {
   const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
   return {
     id: `${SCHEDULING_POLICY_RULE_PREFIX}${id}`,
     scope,
     models: [],
-    priorityMode: config.default_policy.priority_mode,
+    priorityMode: 'provider',
     schedulingMode: config.default_policy.scheduling_mode,
     policy: createEmptyModelPolicy(DEFAULT_ROUTING_POLICY_MODEL),
   }
@@ -48,7 +67,7 @@ function policySignature(policy: RoutingModelPolicy): string {
 }
 
 export function readSchedulingPolicies(config: RoutingGroupConfig): SchedulingPolicy[] {
-  const normalized = normalizeRoutingGroupConfig(config)
+  const normalized = normalizeProviderSchedulingConfig(config)
   const entries: SchedulingPolicy[] = []
   const assignedModels = new Set<string>()
   const sharedRules = normalized.rules.filter(isGeneratedSchedulingPolicyRule)
@@ -124,19 +143,19 @@ export function readSchedulingPolicies(config: RoutingGroupConfig): SchedulingPo
 }
 
 export function validateSchedulingPolicies(entries: SchedulingPolicy[]): string | null {
-  if (entries.length === 0) return '请至少添加一条调度配置'
+  if (entries.length === 0) return t('routing.validation.configRequired')
   const assignedModels = new Set<string>()
   let hasAllModels = false
   for (const [index, entry] of entries.entries()) {
     if (entry.scope === 'all') {
-      if (hasAllModels) return '只能有一条适用于全部模型的配置'
+      if (hasAllModels) return t('routing.validation.oneDefault')
       hasAllModels = true
       continue
     }
-    if (entry.models.length === 0) return `请为配置 ${index + 1} 选择至少一个全局模型`
+    if (entry.models.length === 0) return t('routing.validation.selectModels', { index: index + 1 })
     for (const model of entry.models) {
-      if (!model.trim() || model === DEFAULT_ROUTING_POLICY_MODEL) return `配置 ${index + 1} 的模型无效`
-      if (assignedModels.has(model)) return `模型 ${model} 不能重复分配给多条配置`
+      if (!model.trim() || model === DEFAULT_ROUTING_POLICY_MODEL) return t('routing.validation.invalidModels', { index: index + 1 })
+      if (assignedModels.has(model)) return t('routing.validation.duplicateModel', { model })
       assignedModels.add(model)
     }
   }
@@ -144,10 +163,10 @@ export function validateSchedulingPolicies(entries: SchedulingPolicy[]): string 
 }
 
 export function writeSchedulingPolicies(config: RoutingGroupConfig, entries: SchedulingPolicy[]): RoutingGroupConfig {
-  const next = normalizeRoutingGroupConfig(config)
+  const next = normalizeProviderSchedulingConfig(config)
   const defaultEntry = entries.find(entry => entry.scope === 'all')
   if (defaultEntry) {
-    next.default_policy.priority_mode = defaultEntry.priorityMode
+    next.default_policy.priority_mode = 'provider'
     next.default_policy.scheduling_mode = defaultEntry.schedulingMode
   }
   next.model_policies = defaultEntry
@@ -166,7 +185,7 @@ export function writeSchedulingPolicies(config: RoutingGroupConfig, entries: Sch
     const action: RoutingSetSchedulingAction = {
       ...(schedulingIndex >= 0 ? actions[schedulingIndex] as RoutingSetSchedulingAction : {}),
       type: 'set_scheduling',
-      priority_mode: entry.priorityMode,
+      priority_mode: 'provider',
       scheduling_mode: entry.schedulingMode,
     }
     if (schedulingIndex >= 0) actions[schedulingIndex] = action
@@ -182,14 +201,23 @@ export function writeSchedulingPolicies(config: RoutingGroupConfig, entries: Sch
       actions,
     })
   }
-  return normalizeRoutingGroupConfig(next)
+  return normalizeProviderSchedulingConfig(next)
 }
 
 export function schedulingPolicyEditorConfig(config: RoutingGroupConfig, entry: SchedulingPolicy): RoutingGroupConfig {
+  // Project inherited membership for display without copying it into the editable policy.
+  const disabledProviders = new Set(config.disabled_providers)
+  for (const [providerId, enabled] of Object.entries(getDefaultModelPolicy(config).provider_enabled_overrides)) {
+    if (enabled) disabledProviders.delete(providerId)
+    else disabledProviders.add(providerId)
+  }
   return normalizeRoutingGroupConfig({
+    billing_multiplier: config.billing_multiplier,
+    user_visible: config.user_visible,
+    disabled_providers: [...disabledProviders],
     default_policy: {
       ...config.default_policy,
-      priority_mode: entry.priorityMode,
+      priority_mode: 'provider',
       scheduling_mode: entry.schedulingMode,
     },
     model_policies: [{ ...entry.policy, model: DEFAULT_ROUTING_POLICY_MODEL }],

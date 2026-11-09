@@ -7,15 +7,35 @@
     <span v-if="failuresLabel">
       {{ failuresLabel }}
     </span>
+    <details
+      v-if="result.interrupted"
+      class="mt-2 border-t border-border/60 pt-2"
+    >
+      <summary class="cursor-pointer select-none">
+        {{ t('ui.viewInterruptedBatchDetails') }}
+      </summary>
+      <div class="mt-2 max-h-32 space-y-1 overflow-auto break-all">
+        <p>{{ t('ui.completedUserIds') }}：{{ userIds(result.completed_user_ids) }}</p>
+        <p>{{ t('ui.userIdsWithUncertainResults') }}：{{ userIds(result.uncertain_user_ids) }}</p>
+        <p>{{ t('ui.unprocessedUserIds') }}：{{ userIds(result.unprocessed_user_ids) }}</p>
+      </div>
+    </details>
   </div>
 </template>
 
 <script setup lang="ts">
 import type { UserBatchActionResponse } from '@/api/users'
+import { useI18n } from '@/i18n'
 
 defineProps<{
   result: UserBatchActionResponse | null
   label: string
   failuresLabel: string
 }>()
+
+const { t } = useI18n()
+
+function userIds(ids?: string[]): string {
+  return ids && ids.length > 0 ? ids.join(', ') : '-'
+}
 </script>

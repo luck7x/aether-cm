@@ -3,6 +3,12 @@ import { view } from './helpers'
 
 export const publicRoutes: RouteRecordRaw[] = [
   {
+    path: '/status',
+    name: 'PublicStatus',
+    component: view(() => import('@/views/public/Status.vue')),
+    meta: { requiresAuth: false }
+  },
+  {
     path: '/',
     name: 'Home',
     component: view(() => import('@/views/public/Home.vue')),
@@ -68,12 +74,6 @@ export const publicRoutes: RouteRecordRaw[] = [
         meta: { requiresAuth: false }
       }
     ]
-  },
-  {
-    path: '/logo-demo',
-    name: 'LogoColorDemo',
-    component: view(() => import('@/views/public/LogoColorDemo.vue')),
-    meta: { requiresAuth: false }
   },
   {
     path: '/auth/callback',
