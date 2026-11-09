@@ -186,6 +186,7 @@ pub(crate) use aether_ai_formats::{
     strip_incompatible_openai_responses_reasoning_items_with_policy, ApiOperation, ClientSurface,
     OPENAI_RESPONSES_OPERATION_COMPACT,
 };
+pub(crate) use aether_ai_formats::contracts::TYPESAFE_SYSTEMONE_SYNC_PLAN_KIND;
 
 pub(crate) fn plan_kind_matches_api_operation(
     plan_kind: &str,

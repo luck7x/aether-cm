@@ -48,6 +48,25 @@ api_get() {
     -H 'X-GitHub-Api-Version: 2022-11-28' "$1"
 }
 
+diagnose_failed_run() {
+  local failed_run_id="$1"
+  local jobs_json
+  jobs_json="$(api_get "${API_ROOT}/actions/runs/${failed_run_id}/jobs?per_page=100")" || return 0
+  progress 100 'GitHub Actions 失败步骤摘要：'
+  while IFS=$'\t' read -r job_id job_name job_url; do
+    [[ -n "${job_id}" ]] || continue
+    printf '  - %s\n    %s\n' "${job_name}" "${job_url}"
+    {
+      curl --fail --location --silent --show-error --connect-timeout 10 --max-time 90 \
+        --header "@${auth_header_file}" \
+        "${API_ROOT}/actions/jobs/${job_id}/logs" |
+        sed -E $'s/\\x1b\\[[0-9;]*[[:alpha:]]//g' |
+        grep -Ei 'panicked at|fatal runtime error|stack overflow|assertion .* failed|could not compile|test result: FAILED|##\[error\]' |
+        tail -n 12
+    } || true
+  done < <(jq -r '.jobs[] | select(.conclusion == "failure") | [.id,.name,.html_url] | @tsv' <<<"${jobs_json}")
+}
+
 progress 5 "推送锁定提交到 ${REPOSITORY} main：${BUILD_SHA}"
 askpass="$(mktemp /root/.aether-git-askpass.XXXXXX)"
 cat > "${askpass}" <<'ASKPASS'
@@ -90,7 +109,10 @@ while true; do
     last_summary="${summary}"
   fi
   if [[ "${status}" == "completed" ]]; then
-    [[ "${conclusion}" == "success" ]] || fail "GitHub Actions 未通过：${conclusion:-unknown}"
+    if [[ "${conclusion}" != "success" ]]; then
+      diagnose_failed_run "${run_id}"
+      fail "GitHub Actions 未通过：${conclusion:-unknown}"
+    fi
     [[ "$(jq -r '.event' <<<"${run_json}")" == "push" ]] || fail 'Actions 不是由 main push 触发'
     [[ "$(jq -r '.path' <<<"${run_json}")" == ".github/workflows/cm-build-linux-amd64.yml" ]] || \
       fail 'Actions workflow 路径不匹配'
