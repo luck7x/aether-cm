@@ -135,6 +135,22 @@ admin_psql() {
   fi
 }
 
+admin_pg_dump() {
+  local database_name="$1"
+  local output_file="$2"
+  if [[ "${POSTGRES_ADMIN_MODE}" == "peer" ]]; then
+    runuser -u postgres -- pg_dump \
+      --format=custom --compress=6 --no-owner --no-acl \
+      --dbname="${database_name}" > "${output_file}"
+  else
+    local admin_database_url
+    admin_database_url="$(replace_database_name "${POSTGRES_ADMIN_URL}" "${database_name}")"
+    pg_dump --format=custom --compress=6 --no-owner --no-acl \
+      --dbname="${admin_database_url}" > "${output_file}"
+  fi
+  [[ -s "${output_file}" ]]
+}
+
 run_new_binary_for_database() {
   local database_url="$1"
   shift
@@ -385,8 +401,7 @@ cp -a "${ENV_FILE}" "${OLD_ENV_COPY}"
 tar --acls --xattrs --numeric-owner -C /etc -czf "${BACKUP_DIR}/aether-config.tar.gz" aether
 systemctl cat "${SERVICE}.service" > "${BACKUP_DIR}/${SERVICE}.service.txt"
 printf '%s\n' "${OLD_TARGET}" > "${BACKUP_DIR}/old-release.txt"
-pg_dump --format=custom --compress=6 --no-owner --no-acl \
-  --file="${BACKUP_DIR}/rehearsal.dump" "${OLD_DATABASE_URL}"
+admin_pg_dump "${OLD_DATABASE_NAME}" "${BACKUP_DIR}/rehearsal.dump"
 pg_restore --list "${BACKUP_DIR}/rehearsal.dump" > "${BACKUP_DIR}/rehearsal.list"
 
 progress 18 "恢复演练数据库：${REHEARSAL_DATABASE_NAME}"
@@ -423,8 +438,7 @@ capture_financial_baseline "${OLD_DATABASE_URL}" "${BACKUP_DIR}/financial.before
 psql "${OLD_DATABASE_URL}" -X -v ON_ERROR_STOP=1 -Atqc \
   'SELECT version, description, success FROM public._sqlx_migrations ORDER BY version' \
   > "${BACKUP_DIR}/sqlx-migrations.before.tsv"
-pg_dump --format=custom --compress=6 --no-owner --no-acl \
-  --file="${BACKUP_DIR}/aether-final.dump" "${OLD_DATABASE_URL}"
+admin_pg_dump "${OLD_DATABASE_NAME}" "${BACKUP_DIR}/aether-final.dump"
 pg_restore --list "${BACKUP_DIR}/aether-final.dump" > "${BACKUP_DIR}/aether-final.list"
 (cd "${BACKUP_DIR}" && sha256sum aether-final.dump aether-config.tar.gz > SHA256SUMS)
 
