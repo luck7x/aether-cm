@@ -6,7 +6,8 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 readonly INSTALL_ROOT="${INSTALL_ROOT:-/opt/aether}"
 readonly ENV_FILE="${AETHER_ENV_FILE:-/etc/aether/aether-gateway.env}"
 readonly SERVICE="${AETHER_SERVICE:-aether-gateway}"
-readonly BUNDLE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly BUNDLE_ROOT="$(cd -- "${AETHER_BUNDLE_ROOT:-${SCRIPT_ROOT}}" && pwd)"
 readonly RUN_ID="$(date +%Y%m%d-%H%M%S)"
 readonly VERSION_NAME="$(basename "${BUNDLE_ROOT}")"
 readonly RELEASE="${INSTALL_ROOT}/releases/${VERSION_NAME}-${RUN_ID}"
@@ -386,7 +387,7 @@ required_bytes="$(( database_size * 3 + 2 * 1024 * 1024 * 1024 ))"
 progress 6 "安装只读 release：${RELEASE}"
 install -d -m 0755 -o root -g root "${RELEASE}/bin" "${RELEASE}/frontend"
 install -m 0555 -o root -g root "${BUNDLE_ROOT}/bin/aether-gateway" "${RELEASE}/bin/aether-gateway"
-install -m 0500 -o root -g root "${BUNDLE_ROOT}/rollback-vps-blue-green.sh" \
+install -m 0500 -o root -g root "${SCRIPT_ROOT}/rollback-vps-blue-green.sh" \
   /root/aether-blue-green-rollback.sh
 cp -a "${BUNDLE_ROOT}/frontend/." "${RELEASE}/frontend/"
 chown -R root:root "${RELEASE}"
