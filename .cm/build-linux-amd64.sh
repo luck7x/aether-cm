@@ -26,6 +26,13 @@ ARCHIVE="${OUTPUT_ROOT}/${PACKAGE_NAME}.tar.gz"
 rm -rf "${PACKAGE_ROOT}"
 mkdir -p "${PACKAGE_ROOT}/bin" "${PACKAGE_ROOT}/frontend"
 
+cat > "${PACKAGE_ROOT}/BUILD_INFO" <<EOF
+git_sha=$(git rev-parse HEAD)
+build_version=${BUILD_VERSION}
+rustc=$(rustc --version)
+target=$(rustc -vV | awk -F': ' '/^host:/ {print $2}')
+EOF
+
 echo '[1/7] Installing aether-vscodex web dependencies'
 cd "${ROOT}/aether-vscodex/web"
 npm ci
@@ -62,7 +69,12 @@ echo '[6/7] Assembling release bundle'
 install -m 0755 "${ROOT}/target/release/aether-gateway" "${PACKAGE_ROOT}/bin/aether-gateway"
 cp -a "${ROOT}/frontend/dist/." "${PACKAGE_ROOT}/frontend/"
 install -m 0755 "${ROOT}/.cm/install-vps-bundle.sh" "${PACKAGE_ROOT}/install-vps-bundle.sh"
+install -m 0755 "${ROOT}/.cm/rollback-vps-blue-green.sh" "${PACKAGE_ROOT}/rollback-vps-blue-green.sh"
 install -m 0644 "${ROOT}/CM_README.md" "${PACKAGE_ROOT}/CM_README.md"
+(
+  cd "${PACKAGE_ROOT}"
+  sha256sum bin/aether-gateway > bin/aether-gateway.sha256
+)
 
 echo '[7/7] Packaging and checksumming release bundle'
 tar -C "${OUTPUT_ROOT}" -czf "${ARCHIVE}" "${PACKAGE_NAME}"

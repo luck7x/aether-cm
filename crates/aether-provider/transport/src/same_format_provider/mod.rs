@@ -1653,6 +1653,31 @@ mod tests {
     }
 
     #[test]
+    fn resolves_typesafe_systemone_api_key_with_bearer_header() {
+        let mut transport = sample_transport("custom");
+        transport.endpoint.api_format = "typesafe:systemone".to_string();
+        transport.key.auth_type = "api_key".to_string();
+        let behavior = classify_same_format_provider_request_behavior(
+            &transport,
+            SameFormatProviderRequestBehaviorParams {
+                require_streaming: false,
+                provider_api_format: "typesafe:systemone",
+                report_kind: "typesafe_systemone_sync_success",
+            },
+        );
+
+        assert_eq!(
+            resolve_same_format_provider_direct_auth(
+                &behavior,
+                &transport,
+                SameFormatProviderFamily::Standard,
+                "typesafe:systemone",
+            ),
+            Some(("authorization".to_string(), "Bearer secret".to_string()))
+        );
+    }
+
+    #[test]
     fn resolves_openai_search_direct_auth_with_bearer_header() {
         let mut transport = sample_transport("custom");
         transport.endpoint.api_format = "openai:search".to_string();
@@ -1777,6 +1802,39 @@ mod tests {
 
         assert_eq!(body.get("model"), Some(&json!("upstream-model")));
         assert_eq!(body.get("stream"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn typesafe_systemone_preserves_native_envelope_and_rewrites_only_model() {
+        let body = json!({
+            "model": "jev-latest",
+            "state": {"opaque": {"nested": [1, 2, 3]}},
+            "questions": [{"role": "user", "content": "hello"}],
+            "future_field": {"keep": true}
+        });
+        let output = build_same_format_provider_request_body(SameFormatProviderRequestBodyInput {
+            body_json: &body,
+            mapped_model: "jev-2026-11-01",
+            client_api_format: "typesafe:systemone",
+            provider_api_format: "typesafe:systemone",
+            source_model: Some("jev-latest"),
+            family: SameFormatProviderFamily::Standard,
+            body_rules: None,
+            request_headers: None,
+            upstream_is_stream: false,
+            force_body_stream_field: false,
+            kiro_auth_config: None,
+            is_claude_code: false,
+            is_vertex: false,
+            enable_model_directives: false,
+        })
+        .expect("SystemOne native request body should build");
+
+        let mut expected = body;
+        expected["model"] = json!("jev-2026-11-01");
+        assert_eq!(output, expected);
+        assert!(output.get("messages").is_none());
+        assert!(output.get("stream").is_none());
     }
 
     #[test]

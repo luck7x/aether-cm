@@ -2045,6 +2045,31 @@ mod tests {
     }
 
     #[test]
+    fn typesafe_systemone_url_uses_native_path_and_drops_gateway_credentials() {
+        let transport = sample_transport(
+            "custom",
+            "typesafe:systemone",
+            "https://api.typesafe.example/v1",
+            None,
+        );
+        let url = build_transport_request_url(
+            &transport,
+            TransportRequestUrlParams {
+                provider_api_format: "typesafe:systemone",
+                mapped_model: Some("jev-latest"),
+                upstream_is_stream: false,
+                request_query: Some("key=downstream-secret&tenant=demo"),
+                kiro_api_region: None,
+                api_operation: None,
+            },
+        )
+        .expect("SystemOne URL should build");
+
+        assert_eq!(url, "https://api.typesafe.example/v1/systemone?tenant=demo");
+        assert!(!url.contains("downstream-secret"));
+    }
+
+    #[test]
     fn gemini_interactions_request_url_uses_stable_v1_endpoint() {
         let gemini = sample_transport(
             "gemini",
