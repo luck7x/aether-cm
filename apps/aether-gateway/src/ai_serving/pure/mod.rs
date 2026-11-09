@@ -176,6 +176,7 @@ pub(crate) use aether_ai_formats::api::{
     OPENAI_VIDEO_CREATE_SYNC_PLAN_KIND, OPENAI_VIDEO_DELETE_SYNC_PLAN_KIND,
     OPENAI_VIDEO_REMIX_SYNC_PLAN_KIND,
 };
+pub(crate) use aether_ai_formats::contracts::TYPESAFE_SYSTEMONE_SYNC_PLAN_KIND;
 pub(crate) use aether_ai_formats::{
     api_format_defaults_to_client_error_failover, api_format_defaults_to_non_stream,
     api_format_permission_covers, codex_responses_lite_tool_is_client_executed,
@@ -186,7 +187,6 @@ pub(crate) use aether_ai_formats::{
     strip_incompatible_openai_responses_reasoning_items_with_policy, ApiOperation, ClientSurface,
     OPENAI_RESPONSES_OPERATION_COMPACT,
 };
-pub(crate) use aether_ai_formats::contracts::TYPESAFE_SYSTEMONE_SYNC_PLAN_KIND;
 
 pub(crate) fn plan_kind_matches_api_operation(
     plan_kind: &str,
