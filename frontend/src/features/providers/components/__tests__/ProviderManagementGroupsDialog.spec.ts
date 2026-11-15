@@ -16,7 +16,7 @@ async function settle() { for (let i = 0; i < 6; i++) { await Promise.resolve();
 async function mountDialog() {
   root = document.createElement('div'); document.body.appendChild(root)
   app = createApp(ProviderManagementGroupsDialog, { modelValue: true, document: structuredClone(initial),
-    providers: [ { id: 'p1', name: 'One' }, { id: 'p2', name: 'Two' } ] as ProviderWithEndpointsSummary[],
+    providers: [ { id: 'p1', name: 'One' }, { id: 'p2', name: 'Two' }, { id: 'p3', name: 'Three' } ] as ProviderWithEndpointsSummary[],
     onSaved: saved, 'onUpdate:modelValue': closed,
   })
   app.mount(root); await settle()
@@ -32,19 +32,64 @@ beforeEach(() => {
 afterEach(() => { app?.unmount(); root?.remove(); document.body.innerHTML = ''; app = null; root = null })
 
 describe('Provider management groups editor', () => {
-  it('moves membership exclusively and saves only directory data', async () => {
+  it('adds only ungrouped providers and preserves other groups', async () => {
     await mountDialog()
-    const label = [...document.body.querySelectorAll('label')].find(item => item.textContent?.includes('Two'))!
+    const label = [...document.body.querySelectorAll('label')].find(item => item.textContent?.includes('Three'))!
     const input = label.querySelector<HTMLInputElement>('input[type="checkbox"]')!
     input.checked = true; input.dispatchEvent(new Event('change', { bubbles: true })); await settle()
     await click('保存分组')
     expect(api.saveProviderManagementGroups).toHaveBeenCalledWith({ version: 4, groups: [
-      { id: 'free', name: '免费', provider_ids: ['p1', 'p2'] },
-      { id: 'paid', name: '付费', provider_ids: [] },
+      { id: 'free', name: '免费', provider_ids: ['p1', 'p3'] },
+      { id: 'paid', name: '付费', provider_ids: ['p2'] },
     ] })
     expect(saved).toHaveBeenCalledOnce()
     expect(closed).toHaveBeenCalledWith(false)
     expect(initial.groups[1]!.provider_ids).toEqual(['p2'])
+  })
+
+  it('hides other groups even when their edited name is empty, and keeps current members visible', async () => {
+    await mountDialog()
+    const labels = () => [...document.body.querySelectorAll('label')].map(item => item.textContent)
+    expect(labels().some(text => text?.includes('One'))).toBe(true)
+    expect(labels().some(text => text?.includes('Two'))).toBe(false)
+    expect(labels().some(text => text?.includes('Three'))).toBe(true)
+    const names = document.body.querySelectorAll<HTMLInputElement>('input[aria-label="分组名称"]')
+    names[1]!.value = ''; names[1]!.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    expect(labels().some(text => text?.includes('Two'))).toBe(false)
+  })
+
+  it('shows only ungrouped candidates for a new group and bulk-add never moves other groups', async () => {
+    await mountDialog()
+    const name = document.body.querySelector<HTMLInputElement>('input[aria-label="新分组名称"]')!
+    name.value = '新组'; name.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    await click('创建分组')
+    const labels = [...document.body.querySelectorAll('label')].map(item => item.textContent)
+    expect(labels.some(text => text?.includes('One'))).toBe(false)
+    expect(labels.some(text => text?.includes('Two'))).toBe(false)
+    expect(labels.some(text => text?.includes('Three'))).toBe(true)
+    await click('加入搜索结果')
+    await click('保存分组')
+    expect(api.saveProviderManagementGroups).toHaveBeenCalledWith({ version: 4, groups: [
+      ...initial.groups, { id: expect.any(String), name: '新组', provider_ids: ['p3'] },
+    ] })
+  })
+
+  it('makes a removed member available to another group immediately', async () => {
+    await mountDialog()
+    const input = [...document.body.querySelectorAll('label')].find(item => item.textContent?.includes('One'))!.querySelector<HTMLInputElement>('input')!
+    input.checked = false; input.dispatchEvent(new Event('change', { bubbles: true })); await settle()
+    await click('付费 (1)')
+    const labels = [...document.body.querySelectorAll('label')].map(item => item.textContent)
+    expect(labels.some(text => text?.includes('One'))).toBe(true)
+    expect(labels.some(text => text?.includes('Two'))).toBe(true)
+    const search = document.body.querySelector<HTMLInputElement>('input[aria-label="搜索提供商名称或备注"]')!
+    search.value = 'One'; search.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    await click('加入搜索结果')
+    await click('保存分组')
+    expect(api.saveProviderManagementGroups).toHaveBeenCalledWith({ version: 4, groups: [
+      { id: 'free', name: '免费', provider_ids: [] },
+      { id: 'paid', name: '付费', provider_ids: ['p2', 'p1'] },
+    ] })
   })
 
   it('keeps failed saves open and requires explicit reload before replacing edits', async () => {

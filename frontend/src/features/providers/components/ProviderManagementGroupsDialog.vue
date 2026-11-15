@@ -39,7 +39,7 @@
             <div v-for="provider in matching" :key="provider.id" class="flex items-center gap-2 px-3 py-2">
               <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
                 <Checkbox :checked="selectedGroup.provider_ids.includes(provider.id)" :disabled="busy" @update:checked="assign(provider.id, $event)" />
-                <span class="min-w-0"><span class="block truncate text-sm">{{ provider.name }}</span><span class="block truncate text-xs text-muted-foreground">{{ membership.get(provider.id) || t('providers.management.ungrouped') }}</span></span>
+                <span class="min-w-0"><span class="block truncate text-sm">{{ provider.name }}</span><span class="block truncate text-xs text-muted-foreground">{{ membership.get(provider.id)?.name || t('providers.management.ungrouped') }}</span></span>
               </label>
               <template v-if="selectedGroup.provider_ids.includes(provider.id)">
                 <Button variant="ghost" size="sm" :disabled="busy || selectedGroup.provider_ids.indexOf(provider.id) === 0" :aria-label="t('providers.management.up')" @click="moveProvider(provider.id, -1)">↑</Button>
@@ -82,7 +82,7 @@ const search = ref('')
 const busy = ref(false)
 const error = ref('')
 const selectedGroup = computed(() => draft.value.groups.find(group => group.id === selectedId.value))
-const membership = computed(() => new Map(draft.value.groups.flatMap(group => group.provider_ids.map(id => [id, group.name] as const))))
+const membership = computed(() => new Map(draft.value.groups.flatMap(group => group.provider_ids.map(id => [id, { id: group.id, name: group.name }] as const))))
 const validNames = computed(() => {
   const names = draft.value.groups.map(group => group.name.trim().toLocaleLowerCase())
   return names.every(name => name.length > 0 && [...name].length <= 80) && new Set(names).size === names.length
@@ -90,7 +90,11 @@ const validNames = computed(() => {
 const matching = computed(() => {
   const query = search.value.trim().toLocaleLowerCase()
   const order = new Map(selectedGroup.value?.provider_ids.map((id, index) => [id, index]) ?? [])
-  return props.providers.filter(provider => !query || `${provider.name} ${provider.description ?? ''}`.toLocaleLowerCase().includes(query))
+  return props.providers.filter(provider => {
+    const owner = membership.value.get(provider.id)
+    return (!owner || owner.id === selectedId.value)
+      && (!query || `${provider.name} ${provider.description ?? ''}`.toLocaleLowerCase().includes(query))
+  })
     .sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity) || a.name.localeCompare(b.name))
 })
 
@@ -127,11 +131,13 @@ function moveGroup(index: number, delta: number) {
   draft.value.groups.splice(next, 0, group)
 }
 function assign(id: string, checked: boolean) {
+  const owner = membership.value.get(id)
+  if (checked && owner && owner.id !== selectedId.value) return
   if (checked) draft.value.groups = assignManagementProviders(draft.value.groups, selectedId.value, [id])
   else if (selectedGroup.value) selectedGroup.value.provider_ids = selectedGroup.value.provider_ids.filter(value => value !== id)
 }
 function addMatching() {
-  draft.value.groups = assignManagementProviders(draft.value.groups, selectedId.value, matching.value.map(provider => provider.id))
+  draft.value.groups = assignManagementProviders(draft.value.groups, selectedId.value, matching.value.filter(provider => !membership.value.has(provider.id)).map(provider => provider.id))
 }
 function removeMatching() {
   const ids = new Set(matching.value.map(provider => provider.id))
