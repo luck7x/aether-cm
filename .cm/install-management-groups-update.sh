@@ -43,9 +43,7 @@ mkdir -m 0700 "${BACKUP}"
 CONNECTION_FILE="${BACKUP}/postgres.service.conf"
 trap 'rm -f -- "${CONNECTION_FILE}"' EXIT
 AETHER_DEPLOY_DATABASE_CONNECTION="${DATABASE_CONNECTION}" python3 "${SCRIPT_ROOT}/prepare-deploy-postgres.py" "${CONNECTION_FILE}"
-export PGSERVICEFILE="${CONNECTION_FILE}"
-export PGSERVICE=aether_management_update
-psql_app() { psql --dbname='service=aether_management_update' -X -v ON_ERROR_STOP=1 "$@"; }
+psql_app() { PGSERVICEFILE="${CONNECTION_FILE}" PGSERVICE=aether_management_update psql --dbname='service=aether_management_update' -X -v ON_ERROR_STOP=1 "$@"; }
 health() {
   curl -fsS --max-time 5 "http://127.0.0.1:${APP_LISTEN_PORT}/health" >/dev/null 2>&1 &&
     curl -fsS --max-time 5 "http://127.0.0.1:${APP_LISTEN_PORT}/readyz" >/dev/null 2>&1

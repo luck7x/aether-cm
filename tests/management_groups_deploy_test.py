@@ -26,7 +26,9 @@ if name == 'id': finish('0')
 if name == 'stat': finish('0:600')
 if name in ('sleep', 'chown'): finish()
 if name == 'df': finish('Filesystem 1024-blocks Used Available Capacity Mounted\nfixture 999999999 1 999999998 1% /')
-if name == 'runuser': os.execvp(args[3], args[3:])
+if name == 'runuser':
+ if os.environ.get('PGSERVICEFILE'): finish('Root-only service profile leaked into peer backup', 1)
+ os.execvp(args[3], args[3:])
 if name == 'pg_dump':
  if s['failure'] == 'backup': finish(rc=1)
  finish('fixture-database-backup')

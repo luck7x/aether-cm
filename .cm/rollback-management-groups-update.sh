@@ -22,9 +22,7 @@ DATABASE_CONNECTION="${AETHER_DATABASE_URL:-${AETHER_GATEWAY_DATA_POSTGRES_URL:-
 CONNECTION_FILE="$(mktemp /root/.aether-rollback-db.XXXXXX)"
 trap 'rm -f -- "${CONNECTION_FILE}"' EXIT
 AETHER_DEPLOY_DATABASE_CONNECTION="${DATABASE_CONNECTION}" python3 "${BACKUP}/prepare-deploy-postgres.py" "${CONNECTION_FILE}"
-export PGSERVICEFILE="${CONNECTION_FILE}"
-export PGSERVICE=aether_management_update
-psql_app() { psql --dbname='service=aether_management_update' -X -v ON_ERROR_STOP=1 "$@"; }
+psql_app() { PGSERVICEFILE="${CONNECTION_FILE}" PGSERVICE=aether_management_update psql --dbname='service=aether_management_update' -X -v ON_ERROR_STOP=1 "$@"; }
 ledger() { psql_app -Atqc "SELECT version, encode(checksum, 'hex'), success FROM public._sqlx_migrations ORDER BY version"; }
 health() {
   curl -fsS --max-time 5 "http://127.0.0.1:${APP_PORT:-8084}/health" >/dev/null 2>&1 &&
