@@ -423,7 +423,8 @@ pub(crate) fn admin_proxy_local_requires_buffered_body(
                 )
                 | (Some("global_models_manage"), http::Method::POST, Some("assign_to_providers"))
                 | (Some("providers_manage"), http::Method::POST, Some("create_provider"))
-                | (Some("providers_manage"), http::Method::PATCH, Some("update_provider")) => true,
+                | (Some("providers_manage"), http::Method::PATCH, Some("update_provider"))
+                | (Some("providers_manage"), http::Method::PUT, Some("management_groups")) => true,
                 _ => false,
             }
         })

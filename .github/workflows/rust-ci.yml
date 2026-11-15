@@ -160,6 +160,9 @@ jobs:
       - name: Run installer and supply-chain fixtures
         shell: bash
         run: |
+          bash -n .cm/install-management-groups-update.sh
+          bash -n .cm/rollback-management-groups-update.sh
+          python3 -B tests/management_groups_deploy_test.py
           python3 tests/compose_database_config_test.py
           bash tests/deploy_state_safety_test.sh
           bash tests/install_archive_safety_test.sh

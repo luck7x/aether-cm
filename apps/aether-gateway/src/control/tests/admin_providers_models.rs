@@ -767,5 +767,16 @@ fn management_groups_require_provider_read_or_write_permissions() {
             allowed
         );
         assert!(!decision.is_execution_runtime_candidate());
+        let context = GatewayPublicRequestContext::from_request_parts(
+            "management-groups-body",
+            &method,
+            &uri,
+            &headers,
+            Some(decision),
+        );
+        assert_eq!(
+            local_proxy_route_requires_buffered_body(&context),
+            method == http::Method::PUT
+        );
     }
 }

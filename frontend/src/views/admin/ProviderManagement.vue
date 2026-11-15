@@ -417,7 +417,7 @@ const {
   toggle: toggleManagementCollapsed,
 } = useProviderManagementGroups()
 const managementDialogOpen = ref(false)
-const managementOrderActive = computed(() => !managementReady.value || Boolean(managementError.value) || managementGrouped.value)
+const managementOrderActive = computed(() => managementLoading.value || !managementReady.value || Boolean(managementError.value) || managementGrouped.value)
 function onManagementGroupsSaved(document: ProviderManagementGroups) {
   replaceManagementGroups(document)
   showSuccess(t('providers.management.saved'))
