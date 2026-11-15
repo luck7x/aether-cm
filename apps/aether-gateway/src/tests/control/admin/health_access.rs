@@ -784,15 +784,30 @@ async fn gateway_recovers_admin_key_health_locally_with_trusted_admin_principal(
     ));
 
     let (upstream_url, upstream_handle) = start_server(upstream).await;
-    let gateway = build_router_with_state(
-        AppState::new()
-            .expect("gateway should build")
-            .with_data_state_for_tests(
-                GatewayDataState::with_provider_catalog_repository_for_tests(
-                    provider_catalog_repository.clone(),
-                ),
+    let state = AppState::new()
+        .expect("gateway should build")
+        .with_data_state_for_tests(
+            GatewayDataState::with_provider_catalog_repository_for_tests(
+                provider_catalog_repository.clone(),
             ),
-    );
+        );
+    let runtime = state.runtime_state().clone();
+    let cooldown_key = "ap:provider-openai:cooldown:key-openai";
+    let cooldown_index = "ap:provider-openai:cooldown_idx";
+    runtime
+        .kv_set(cooldown_key, "rate_limited".to_string(), None)
+        .await
+        .unwrap();
+    runtime.set_add(cooldown_index, "key-openai").await.unwrap();
+    runtime
+        .kv_set(
+            "ap:other-provider:cooldown:other-key",
+            "rate_limited".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    let gateway = build_router_with_state(state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
     let response = reqwest::Client::new()
@@ -845,6 +860,45 @@ async fn gateway_recovers_admin_key_health_locally_with_trusted_admin_principal(
         }}))
     );
 
+    assert_eq!(runtime.kv_get(cooldown_key).await.unwrap(), None);
+    assert!(runtime
+        .set_members(cooldown_index)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        runtime
+            .kv_get("ap:other-provider:cooldown:other-key")
+            .await
+            .unwrap(),
+        Some("rate_limited".to_string())
+    );
+
+    // Unscoped recovery must clear the same shared cooldown too.
+    runtime
+        .kv_set(cooldown_key, "rate_limited".to_string(), None)
+        .await
+        .unwrap();
+    runtime.set_add(cooldown_index, "key-openai").await.unwrap();
+    let response = reqwest::Client::new()
+        .patch(format!(
+            "{gateway_url}/api/admin/endpoints/health/keys/key-openai"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(runtime.kv_get(cooldown_key).await.unwrap(), None);
+    assert!(runtime
+        .set_members(cooldown_index)
+        .await
+        .unwrap()
+        .is_empty());
+
     gateway_handle.abort();
     upstream_handle.abort();
 }
@@ -884,6 +938,12 @@ async fn gateway_recovers_all_admin_key_health_locally_with_trusted_admin_princi
                 Some(json!({"openai:chat": {"open": true}})),
             ),
             sample_bound_key(
+                "key-openai-cooldown",
+                "provider-openai",
+                "openai:chat",
+                "sk-cooldown",
+            ),
+            sample_bound_key(
                 "key-openai-healthy",
                 "provider-openai",
                 "openai:chat",
@@ -897,15 +957,27 @@ async fn gateway_recovers_all_admin_key_health_locally_with_trusted_admin_princi
     ));
 
     let (upstream_url, upstream_handle) = start_server(upstream).await;
-    let gateway = build_router_with_state(
-        AppState::new()
-            .expect("gateway should build")
-            .with_data_state_for_tests(
-                GatewayDataState::with_provider_catalog_repository_for_tests(
-                    provider_catalog_repository.clone(),
-                ),
+    let state = AppState::new()
+        .expect("gateway should build")
+        .with_data_state_for_tests(
+            GatewayDataState::with_provider_catalog_repository_for_tests(
+                provider_catalog_repository.clone(),
             ),
-    );
+        );
+    let runtime = state.runtime_state().clone();
+    let cooldown_index = "ap:provider-openai:cooldown_idx";
+    for key_id in ["key-openai-circuit", "key-openai-cooldown"] {
+        runtime
+            .kv_set(
+                &format!("ap:provider-openai:cooldown:{key_id}"),
+                "rate_limited".to_string(),
+                None,
+            )
+            .await
+            .unwrap();
+        runtime.set_add(cooldown_index, key_id).await.unwrap();
+    }
+    let gateway = build_router_with_state(state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
     let response = reqwest::Client::new()
@@ -921,7 +993,12 @@ async fn gateway_recovers_all_admin_key_health_locally_with_trusted_admin_princi
     let status = response.status();
     let payload: serde_json::Value = response.json().await.expect("json body should parse");
     assert_eq!(status, StatusCode::OK, "payload={payload}");
-    assert_eq!(payload["recovered_count"], 1);
+    assert_eq!(payload["recovered_count"], 2);
+    assert!(payload["recovered_keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|key| key["key_id"] == "key-openai-cooldown"));
     assert_eq!(payload["recovered_keys"][0]["key_id"], "key-openai-circuit");
     assert_eq!(
         payload["recovered_keys"][0]["provider_id"],
@@ -954,6 +1031,21 @@ async fn gateway_recovers_all_admin_key_health_locally_with_trusted_admin_princi
         healthy_key.circuit_breaker_by_format,
         Some(json!({"openai:chat": {"open": false}}))
     );
+
+    for key_id in ["key-openai-circuit", "key-openai-cooldown"] {
+        assert_eq!(
+            runtime
+                .kv_get(&format!("ap:provider-openai:cooldown:{key_id}"))
+                .await
+                .unwrap(),
+            None
+        );
+    }
+    assert!(runtime
+        .set_members(cooldown_index)
+        .await
+        .unwrap()
+        .is_empty());
 
     gateway_handle.abort();
     upstream_handle.abort();

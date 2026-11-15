@@ -36,9 +36,9 @@ export async function getKeyHealth(keyId: string): Promise<HealthStatus> {
 }
 
 /**
- * 恢复Key健康状态（一键恢复：重置健康度 + 关闭熔断器 + 取消自动禁用）
+ * 恢复Key健康状态（一键恢复：重置健康度 + 关闭熔断器 + 取消自动禁用 + 清除号池冷却）
  * @param keyId Key ID
- * @param apiFormat 可选，指定 API 格式（如 CLAUDE、OPENAI），不指定则恢复所有格式
+ * @param apiFormat 可选，指定 API 格式（如 CLAUDE、OPENAI），不指定则恢复所有格式；号池冷却由所有格式共享，指定格式恢复时也会清除
  */
 export async function recoverKeyHealth(keyId: string, apiFormat?: string): Promise<{
   message: string
@@ -64,7 +64,7 @@ export async function recoverKeyHealth(keyId: string, apiFormat?: string): Promi
 }
 
 /**
- * 批量恢复所有熔断的Key健康状态
+ * 批量恢复所有熔断或号池冷却中的Key健康状态
  */
 export async function recoverAllKeysHealth(): Promise<{
   message: string

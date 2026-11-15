@@ -1,3 +1,4 @@
+use crate::handlers::admin::provider::pool::runtime::read_admin_provider_pool_key_cooldown_reason;
 use crate::handlers::admin::request::AdminAppState;
 use crate::provider_key_auth::provider_key_effective_api_formats;
 use aether_scheduler_core::{
@@ -302,6 +303,12 @@ pub(crate) async fn recover_admin_key_health(
         return None;
     }
 
+    // Pool cooldown is shared across API formats. Explicit recovery must also
+    // remove it, otherwise the scheduler still skips an apparently healthy key.
+    state
+        .clear_admin_provider_pool_cooldown(&key.provider_id, key_id)
+        .await;
+
     Some(json!({
         "message": message,
         "details": details,
@@ -334,23 +341,29 @@ pub(crate) async fn recover_all_admin_key_health(
             .unwrap_or_default()
     };
 
-    let recovered_keys = keys
-        .into_iter()
-        .filter(|key| {
-            key.circuit_breaker_by_format
-                .as_ref()
-                .and_then(serde_json::Value::as_object)
-                .map(|formats| {
-                    formats.values().any(|circuit| {
-                        circuit
-                            .get("open")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(false)
-                    })
+    let mut recovered_keys = Vec::new();
+    for key in keys {
+        let circuit_open = key
+            .circuit_breaker_by_format
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|formats| {
+                formats.values().any(|circuit| {
+                    circuit.get("open").and_then(serde_json::Value::as_bool) == Some(true)
                 })
-                .unwrap_or(false)
-        })
-        .collect::<Vec<_>>();
+            });
+        let pool_cooling_down = read_admin_provider_pool_key_cooldown_reason(
+            state.runtime_state(),
+            &key.provider_id,
+            &key.id,
+        )
+        .await
+        .ok()?
+        .is_some();
+        if circuit_open || pool_cooling_down {
+            recovered_keys.push(key);
+        }
+    }
 
     if recovered_keys.is_empty() {
         return Some(json!({
@@ -376,6 +389,9 @@ pub(crate) async fn recover_all_admin_key_health(
         if !updated {
             continue;
         }
+        state
+            .clear_admin_provider_pool_cooldown(&key.provider_id, &key.id)
+            .await;
         let provider = state
             .read_provider_catalog_providers_by_ids(std::slice::from_ref(&key.provider_id))
             .await
