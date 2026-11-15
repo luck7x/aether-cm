@@ -41,6 +41,7 @@ use crate::data::GatewayDataState;
 const ADMIN_PROVIDERS_DATA_UNAVAILABLE_DETAIL: &str = "Admin provider catalog data unavailable";
 
 mod health;
+mod management_groups;
 
 #[tokio::test]
 async fn gateway_creates_provider_in_selected_routing_group_and_rejects_stale_saves() {

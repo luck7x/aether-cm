@@ -24,6 +24,9 @@ const apiMocks = vi.hoisted(() => ({
   updateProvider: vi.fn(),
 }))
 
+const managementMocks = vi.hoisted(() => ({ getProviderManagementGroups: vi.fn() }))
+vi.mock('@/api/provider-management-groups', () => managementMocks)
+
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }))
 
 vi.mock('@/api/endpoints', async (importOriginal) => ({
@@ -281,6 +284,8 @@ async function openPriorityInput(root: HTMLElement, providerName: string): Promi
 
 beforeEach(() => {
   vi.clearAllMocks()
+  localStorage.removeItem('aether-provider-management-collapsed')
+  managementMocks.getProviderManagementGroups.mockResolvedValue({ version: 0, groups: [] })
   workspace.groups = { 'group-a': createEmptyRoutingGroupConfig(), 'group-b': createEmptyRoutingGroupConfig() }
   workspace.busy = false
   workspace.selectionReady = true
@@ -1036,5 +1041,62 @@ describe('ProviderManagement group priority ordering', () => {
       'provider-1', 'provider-2', 'provider-3', 'provider-4', 'provider-5',
       'provider-6', 'provider-7', 'provider-8', 'provider-9',
     ])
+  })
+})
+
+
+describe('ProviderManagement display-only management groups', () => {
+  it('uses management membership order, filters and expands search matches without changing routing', async () => {
+    apiMocks.getProvidersSummary.mockResolvedValue({ items: [
+      createProvider({ id: 'provider-1', name: 'One', provider_priority: 1 }),
+      createProvider({ id: 'provider-2', name: 'Two', provider_priority: 99 }),
+      createProvider({ id: 'provider-3', name: 'Three' }),
+    ], total: 3 })
+    managementMocks.getProviderManagementGroups.mockResolvedValue({ version: 1, groups: [
+      { id: 'free', name: '免费', provider_ids: ['provider-2', 'provider-1'] },
+      { id: 'paid', name: '付费', provider_ids: ['provider-3'] },
+    ] })
+    const root = await mountView()
+    expect(providerIds(root)).toEqual(['provider-2', 'provider-1', 'provider-3'])
+    const heading = [...root.querySelectorAll<HTMLButtonElement>('table button[aria-expanded]')].find(button => button.textContent?.includes('免费'))!
+    heading.click()
+    await settle()
+    expect(providerIds(root)).toEqual(['provider-3'])
+    const search = root.querySelector<HTMLInputElement>('input[placeholder="搜索提供商名称、备注..."]')
+      ?? root.querySelector<HTMLInputElement>('input[type="text"]')!
+    search.value = 'Two'
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await settle()
+    expect(providerIds(root)).toEqual(['provider-2'])
+    search.value = ''
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await settle()
+    expect(providerIds(root)).toEqual(['provider-3'])
+    const filter = root.querySelector<HTMLSelectElement>('select[aria-label="管理分组"]')!
+    filter.value = 'paid'
+    filter.dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    expect(providerIds(root)).toEqual(['provider-3'])
+    expect(workspace.updatePriorityPolicy).not.toHaveBeenCalled()
+    expect(workspace.updateDraftConfig).not.toHaveBeenCalled()
+    expect(apiMocks.updateProvider).not.toHaveBeenCalled()
+  })
+
+  it('paginates expanded providers and keeps collapsed group headings accessible', async () => {
+    const items = Array.from({ length: 25 }, (_, index) => createProvider({ id: `provider-${index}`, name: `Provider ${index}` }))
+    apiMocks.getProvidersSummary.mockResolvedValue({ items, total: items.length })
+    managementMocks.getProviderManagementGroups.mockResolvedValue({ version: 1, groups: [
+      { id: 'many', name: '大分组', provider_ids: items.map(provider => provider.id) },
+    ] })
+    localStorage.setItem('aether-provider-management-collapsed', JSON.stringify(['many']))
+    const root = await mountView()
+    expect(providerIds(root)).toEqual([])
+    const heading = [...root.querySelectorAll<HTMLButtonElement>('table button[aria-expanded]')].find(button => button.textContent?.includes('大分组'))!
+    expect(heading.getAttribute('aria-expanded')).toBe('false')
+    heading.click()
+    await settle()
+    expect(providerIds(root).length).toBeGreaterThan(0)
+    expect(providerIds(root)[0]).toBe('provider-0')
+    expect(workspace.updatePriorityPolicy).not.toHaveBeenCalled()
   })
 })

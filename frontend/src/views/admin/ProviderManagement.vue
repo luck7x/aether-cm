@@ -36,16 +36,37 @@
           :show-model-filter="false"
           :api-format-filters="apiFormatFilters"
           :model-filters="[]"
-          :has-active-filters="hasActiveFilters"
+          :has-active-filters="directoryHasActiveFilters"
           :loading="loading"
           @toggle-policy-panel="togglePanel"
           @update:search-query="searchQuery = $event"
           @update:filter-api-format="filterApiFormat = $event"
-          @reset-filters="resetFilters"
+          @reset-filters="resetDirectoryFilters"
           @batch-process="openProviderBatchDialog"
           @add-provider="openAddProviderDialog"
-          @refresh="loadProviders"
+          @refresh="refreshDirectory"
         />
+
+        <div class="flex flex-wrap items-center gap-2 border-t border-border/50 px-4 py-3">
+          <label class="flex items-center gap-2 text-sm">
+            <span>{{ t('providers.management.title') }}</span>
+            <select v-model="managementFilter" class="h-9 max-w-60 rounded-md border border-border bg-background px-2" :aria-label="t('providers.management.title')" :disabled="managementLoading">
+              <option value="all">{{ t('providers.management.all') }}</option>
+              <option v-for="group in managementDocument.groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+              <option :value="UNGROUPED">{{ t('providers.management.ungrouped') }}</option>
+            </select>
+          </label>
+          <Button variant="outline" size="sm" :disabled="loading || managementLoading || !managementReady" @click="managementDialogOpen = true">{{ t('providers.management.manage') }}</Button>
+          <template v-if="managementGrouped">
+            <Button variant="ghost" size="sm" :disabled="Boolean(searchQuery.trim())" @click="managementCollapsed = []">{{ t('providers.management.expandAll') }}</Button>
+            <Button variant="ghost" size="sm" :disabled="Boolean(searchQuery.trim())" @click="managementCollapsed = [...managementDocument.groups.map(group => group.id), UNGROUPED]">{{ t('providers.management.collapseAll') }}</Button>
+          </template>
+          <p class="basis-full text-xs text-muted-foreground">{{ t('providers.management.hint') }}</p>
+          <div v-if="managementError" role="alert" class="flex items-center gap-2 text-xs text-destructive">
+            <span>{{ managementError }}</span>
+            <Button variant="outline" size="sm" :disabled="managementLoading" @click="loadManagementGroups">{{ t('providers.management.retry') }}</Button>
+          </div>
+        </div>
 
         <!-- 加载状态 -->
         <div
@@ -57,12 +78,12 @@
 
         <!-- 空状态 -->
         <div
-          v-else-if="displayedProviders.length === 0"
+          v-else-if="directorySections.length === 0"
           class="contents"
         >
           <ProviderEmptyState
-            :has-active-filters="hasActiveFilters"
-            @reset-filters="resetFilters"
+            :has-active-filters="directoryHasActiveFilters"
+            @reset-filters="resetDirectoryFilters"
           />
         </div>
 
@@ -112,8 +133,18 @@
               </TableRow>
             </TableHeader>
             <TableBody>
+              <template v-for="section in pageSections" :key="section.id">
+                <TableRow v-if="managementGrouped" class="bg-muted/30 hover:bg-muted/30">
+                  <td colspan="7" class="px-4 py-2">
+                    <button type="button" class="flex w-full items-center gap-2 text-left text-sm font-medium" :aria-expanded="!isManagementCollapsed(section.id)" @click="toggleManagementGroup(section.id)">
+                      <span aria-hidden="true">{{ isManagementCollapsed(section.id) ? '▸' : '▾' }}</span>
+                      {{ section.name }} <span class="text-muted-foreground">({{ section.count }})</span>
+                    </button>
+                    <p v-if="!section.count && !isManagementCollapsed(section.id)" class="mt-2 text-xs text-muted-foreground">{{ t('providers.management.empty') }}</p>
+                  </td>
+                </TableRow>
               <ProviderTableRow
-                v-for="provider in displayedProviders"
+                v-for="provider in section.providers"
                 :key="provider.id"
                 :provider="provider"
                 :data-provider-sort-id="provider.id"
@@ -143,6 +174,7 @@
                 <template #priority>
                   <div class="flex items-center gap-0.5">
                     <ProviderDragHandle
+                      v-if="!managementGrouped"
                       :provider-name="provider.name"
                       :disabled="loading || priorityEditingDisabled || displayedProviders.length < 2"
                       @pointerdown="startDrag(provider.id, $event)"
@@ -178,17 +210,26 @@
                   />
                 </template>
               </ProviderTableRow>
+              </template>
             </TableBody>
           </Table>
         </div>
 
         <!-- 移动端卡片列表 -->
         <div
-          v-if="!loading && displayedProviders.length > 0"
+          v-if="!loading && directorySections.length > 0"
           class="xl:hidden divide-y divide-border/40"
         >
+          <template v-for="section in pageSections" :key="section.id">
+            <div v-if="managementGrouped" class="bg-muted/30 px-4 py-3">
+              <button type="button" class="flex w-full items-center gap-2 text-left text-sm font-medium" :aria-expanded="!isManagementCollapsed(section.id)" @click="toggleManagementGroup(section.id)">
+                <span aria-hidden="true">{{ isManagementCollapsed(section.id) ? '▸' : '▾' }}</span>
+                {{ section.name }} <span class="text-muted-foreground">({{ section.count }})</span>
+              </button>
+              <p v-if="!section.count && !isManagementCollapsed(section.id)" class="mt-2 text-xs text-muted-foreground">{{ t('providers.management.empty') }}</p>
+            </div>
           <ProviderMobileCard
-            v-for="provider in displayedProviders"
+            v-for="provider in section.providers"
             :key="provider.id"
             :provider="provider"
             :data-provider-sort-id="provider.id"
@@ -231,6 +272,7 @@
             </template>
             <template #drag-handle>
               <ProviderDragHandle
+                v-if="!managementGrouped"
                 class="-ml-2 w-4"
                 :provider-name="provider.name"
                 :disabled="loading || priorityEditingDisabled || displayedProviders.length < 2"
@@ -239,6 +281,7 @@
               />
             </template>
           </ProviderMobileCard>
+          </template>
         </div>
 
         <!-- 分页 -->
@@ -271,6 +314,14 @@
       {{ draggingProvider.name }}
     </div>
   </Teleport>
+
+  <ProviderManagementGroupsDialog
+    v-if="managementDialogOpen"
+    v-model="managementDialogOpen"
+    :document="managementDocument"
+    :providers="providers"
+    @saved="onManagementGroupsSaved"
+  />
 
   <!-- 对话框 -->
   <ProviderFormDialog
@@ -311,6 +362,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
 import Card from '@/components/ui/card.vue'
+import { Button } from '@/components/ui'
+import { useProviderManagementGroups } from '@/features/providers/composables/useProviderManagementGroups'
+import { managementSections, UNGROUPED } from '@/features/providers/utils/managementGroups'
+import type { ProviderManagementGroups } from '@/api/provider-management-groups'
 import Table from '@/components/ui/table.vue'
 import TableHeader from '@/components/ui/table-header.vue'
 import TableBody from '@/components/ui/table-body.vue'
@@ -351,6 +406,21 @@ import { parseApiError } from '@/utils/errorParser'
 import { useI18n } from '@/i18n'
 
 const { t } = useI18n()
+
+const ProviderManagementGroupsDialog = defineAsyncComponent(
+  () => import('@/features/providers/components/ProviderManagementGroupsDialog.vue'),
+)
+const {
+  document: managementDocument, loading: managementLoading, ready: managementReady,
+  error: managementError, filter: managementFilter, collapsed: managementCollapsed,
+  grouped: managementGrouped, replace: replaceManagementGroups, load: loadManagementGroups,
+  toggle: toggleManagementCollapsed,
+} = useProviderManagementGroups()
+const managementDialogOpen = ref(false)
+function onManagementGroupsSaved(document: ProviderManagementGroups) {
+  replaceManagementGroups(document)
+  showSuccess(t('providers.management.saved'))
+}
 
 const ProviderDetailDrawer = defineAsyncComponent(
   () => import('@/features/providers/components/ProviderDetailDrawer.vue'),
@@ -552,6 +622,10 @@ const {
   () => [],
 )
 
+const directoryHasActiveFilters = computed(() => hasActiveFilters.value || managementFilter.value !== 'all')
+function resetDirectoryFilters() { resetFilters(); managementFilter.value = 'all' }
+function refreshDirectory() { void loadProviders(); void loadManagementGroups() }
+
 const {
   loadArchitectureSchemas,
   loadBalances,
@@ -619,11 +693,13 @@ function setGroupPriority(providerId: string, priority: number) {
     provider_priority_overrides: { ...policy.provider_priority_overrides, [providerId]: priority },
   })
 }
+const managementMembership = computed(() => new Map(managementDocument.value.groups.flatMap(group => group.provider_ids.map(id => [id, group.id] as const))))
 const filteredProviders = computed(() => {
   const search = searchQuery.value.trim().toLocaleLowerCase()
   return providers.value.filter(provider => (
     (!search || `${provider.name} ${provider.description ?? ''}`.toLocaleLowerCase().includes(search))
     && (filterApiFormat.value === 'all' || provider.api_formats?.includes(filterApiFormat.value))
+    && (managementFilter.value === 'all' || (managementMembership.value.get(provider.id) ?? UNGROUPED) === managementFilter.value)
   ))
 })
 const providerListRef = ref<HTMLElement | null>(null)
@@ -641,7 +717,7 @@ const {
   () => sortGroupProviders(priorityConfig.value, filteredProviders.value),
   providerListRef,
   {
-    disabled: () => priorityEditingDisabled.value || loading.value,
+    disabled: () => managementGrouped.value || priorityEditingDisabled.value || loading.value,
     move(providerId, targetId) {
       const config = priorityConfig.value
       const policy = selectedPolicy.value?.policy
@@ -651,14 +727,37 @@ const {
     },
   },
 )
+// Management order is display-only. Priority inputs still explicitly edit scheduling.
+const directorySections = computed(() => {
+  if (!managementGrouped.value) return orderedProviders.value.length
+    ? [{ id: UNGROUPED, name: t('providers.management.ungrouped'), providers: orderedProviders.value }] : []
+  return managementSections(managementDocument.value.groups, orderedProviders.value, t('providers.management.ungrouped'))
+    .filter(section => (managementFilter.value === 'all' || managementFilter.value === section.id)
+      && ((!searchQuery.value.trim() && filterApiFormat.value === 'all') || section.providers.length > 0))
+})
+function isManagementCollapsed(id: string) {
+  return managementGrouped.value && !searchQuery.value.trim() && managementCollapsed.value.includes(id)
+}
+function toggleManagementGroup(id: string) {
+  if (!searchQuery.value.trim()) toggleManagementCollapsed(id)
+}
+const expandedDirectoryProviders = computed(() => directorySections.value.flatMap(section => isManagementCollapsed(section.id) ? [] : section.providers))
 const displayedProviders = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
-  return orderedProviders.value.slice(start, start + pageSize.value)
+  return expandedDirectoryProviders.value.slice(start, start + pageSize.value)
 })
-watch(() => filteredProviders.value.length, length => {
+const pageSections = computed(() => {
+  const pageIds = new Set(displayedProviders.value.map(provider => provider.id))
+  return directorySections.value.map(section => ({ ...section, count: section.providers.length,
+    providers: isManagementCollapsed(section.id) ? [] : section.providers.filter(provider => pageIds.has(provider.id)),
+  })).filter(section => section.providers.length > 0 || isManagementCollapsed(section.id) || section.count === 0)
+})
+watch(() => expandedDirectoryProviders.value.length, length => {
   total.value = length
   currentPage.value = Math.min(currentPage.value, Math.max(1, Math.ceil(length / pageSize.value)))
 }, { immediate: true })
+watch(managementFilter, () => { currentPage.value = 1; cancelDrag() })
+watch(managementGrouped, cancelDrag)
 watch(() => [schedulingContext.value.busy, selectedPolicy.value?.scope, selectedPolicy.value?.modelNames.join('|')], () => {
   cancelDrag()
   currentPage.value = 1
@@ -923,6 +1022,7 @@ function ensureResourcesLoaded() {
 
 onMounted(() => {
   ensureResourcesLoaded()
+  void loadManagementGroups()
   document.addEventListener('click', handleGlobalClick, true)
 })
 

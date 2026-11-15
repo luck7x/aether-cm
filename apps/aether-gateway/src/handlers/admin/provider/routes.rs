@@ -4,6 +4,16 @@ use crate::handlers::admin::request::{AdminRouteRequest, AdminRouteResult};
 pub(crate) async fn maybe_build_local_admin_provider_response(
     request: AdminRouteRequest<'_>,
 ) -> AdminRouteResult {
+    if let Some(response) = super::management_groups::maybe_build_response(
+        &request.state(),
+        &request.request_context(),
+        request.request_body(),
+    )
+    .await?
+    {
+        return Ok(Some(response));
+    }
+
     if let Some(response) = oauth::maybe_build_local_admin_provider_oauth_response(
         &request.state(),
         &request.request_context(),

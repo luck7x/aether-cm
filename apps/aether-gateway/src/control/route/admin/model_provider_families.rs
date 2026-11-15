@@ -6,7 +6,17 @@ pub(super) fn classify_admin_model_provider_family_route(
     method: &http::Method,
     normalized_path: &str,
 ) -> Option<ClassifiedRoute> {
-    if method == http::Method::GET && normalized_path == "/api/admin/models/catalog" {
+    if matches!(*method, http::Method::GET | http::Method::PUT)
+        && normalized_path == "/api/admin/provider-management-groups"
+    {
+        Some(classified(
+            "admin_proxy",
+            "providers_manage",
+            "management_groups",
+            "admin:providers",
+            false,
+        ))
+    } else if method == http::Method::GET && normalized_path == "/api/admin/models/catalog" {
         Some(classified(
             "admin_proxy",
             "model_catalog_manage",
