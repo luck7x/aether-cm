@@ -119,16 +119,26 @@ pub(super) async fn maybe_build_response(
         .into_iter()
         .map(|provider| provider.id)
         .collect();
+    let previous_ids: HashSet<_> = current
+        .groups
+        .iter()
+        .flat_map(|group| &group.provider_ids)
+        .collect();
     if next
         .groups
         .iter()
         .flat_map(|group| &group.provider_ids)
-        .any(|id| !providers.contains(id))
+        .any(|id| !providers.contains(id) && !previous_ids.contains(id))
     {
         return Ok(error(
             StatusCode::BAD_REQUEST,
             "包含已删除或不存在的提供商，请刷新目录后重试",
         ));
+    }
+    // Only an authoritative server-side catalog read can clean up deleted providers.
+    // Never infer deletion from a browser's partial or failed directory load.
+    for group in &mut next.groups {
+        group.provider_ids.retain(|id| providers.contains(id));
     }
     next.version = current
         .version

@@ -1057,26 +1057,26 @@ describe('ProviderManagement display-only management groups', () => {
       { id: 'paid', name: '付费', provider_ids: ['provider-3'] },
     ] })
     const root = await mountView()
-    expect(providerIds(root)).toEqual(['provider-2', 'provider-1', 'provider-3'])
+    expect(providerOrder(root)).toEqual(['provider-2', 'provider-1', 'provider-3'])
     const heading = [...root.querySelectorAll<HTMLButtonElement>('table button[aria-expanded]')].find(button => button.textContent?.includes('免费'))!
     heading.click()
     await settle()
-    expect(providerIds(root)).toEqual(['provider-3'])
+    expect(providerOrder(root)).toEqual(['provider-3'])
     const search = root.querySelector<HTMLInputElement>('input[placeholder="搜索提供商名称、备注..."]')
       ?? root.querySelector<HTMLInputElement>('input[type="text"]')!
     search.value = 'Two'
     search.dispatchEvent(new Event('input', { bubbles: true }))
     await settle()
-    expect(providerIds(root)).toEqual(['provider-2'])
+    expect(providerOrder(root)).toEqual(['provider-2'])
     search.value = ''
     search.dispatchEvent(new Event('input', { bubbles: true }))
     await settle()
-    expect(providerIds(root)).toEqual(['provider-3'])
+    expect(providerOrder(root)).toEqual(['provider-3'])
     const filter = root.querySelector<HTMLSelectElement>('select[aria-label="管理分组"]')!
-    filter.value = 'paid'
+    filter.value = 'free'
     filter.dispatchEvent(new Event('change', { bubbles: true }))
     await settle()
-    expect(providerIds(root)).toEqual(['provider-3'])
+    expect(providerOrder(root)).toEqual(['provider-2', 'provider-1'])
     expect(workspace.updatePriorityPolicy).not.toHaveBeenCalled()
     expect(workspace.updateDraftConfig).not.toHaveBeenCalled()
     expect(apiMocks.updateProvider).not.toHaveBeenCalled()
@@ -1090,13 +1090,25 @@ describe('ProviderManagement display-only management groups', () => {
     ] })
     localStorage.setItem('aether-provider-management-collapsed', JSON.stringify(['many']))
     const root = await mountView()
-    expect(providerIds(root)).toEqual([])
+    expect(providerOrder(root)).toEqual([])
     const heading = [...root.querySelectorAll<HTMLButtonElement>('table button[aria-expanded]')].find(button => button.textContent?.includes('大分组'))!
     expect(heading.getAttribute('aria-expanded')).toBe('false')
     heading.click()
     await settle()
-    expect(providerIds(root).length).toBeGreaterThan(0)
-    expect(providerIds(root)[0]).toBe('provider-0')
+    expect(providerOrder(root).length).toBeGreaterThan(0)
+    expect(providerOrder(root)[0]).toBe('provider-0')
+    expect(workspace.updatePriorityPolicy).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('ProviderManagement management group load failures', () => {
+  it('does not expose scheduling drag handles when management groups could not be loaded', async () => {
+    managementMocks.getProviderManagementGroups.mockRejectedValue(new Error('offline'))
+    apiMocks.getProvidersSummary.mockResolvedValue({ items: [createProvider(), createProvider({ id: 'provider-2', name: 'Two' })], total: 2 })
+    const root = await mountView()
+    expect(root.querySelector('[data-provider-drag-handle]')).toBeNull()
+    expect(root.querySelector('[role="alert"]')).not.toBeNull()
     expect(workspace.updatePriorityPolicy).not.toHaveBeenCalled()
   })
 })

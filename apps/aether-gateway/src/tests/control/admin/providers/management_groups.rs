@@ -8,7 +8,10 @@ async fn management_groups_are_admin_only_exclusive_versioned_and_do_not_change_
         vec![],
     ));
     let original = repository.list_providers(false).await.unwrap();
-    let initial = json!({"version": 0, "groups": []}).to_string();
+    let initial = json!({"version": 0, "groups": [{
+        "id": "00000000-0000-0000-0000-000000000001", "name": "old", "provider_ids": ["removed"]
+    }]})
+    .to_string();
     let data = GatewayDataState::with_provider_catalog_repository_for_tests(repository.clone())
         .with_system_config_values_for_tests(vec![(
             "provider_management_groups".to_string(),
@@ -34,7 +37,7 @@ async fn management_groups_are_admin_only_exclusive_versioned_and_do_not_change_
     let a = uuid::Uuid::new_v4().to_string();
     let b = uuid::Uuid::new_v4().to_string();
     let doc = json!({"version": 0, "groups": [
-        {"id": a, "name": " 免费 ", "provider_ids": ["provider-1"]},
+        {"id": a, "name": " 免费 ", "provider_ids": ["provider-1", "removed"]},
         {"id": b, "name": "付费", "provider_ids": []}
     ]});
     let response = request(http::Method::PUT).json(&doc).send().await.unwrap();
@@ -43,6 +46,7 @@ async fn management_groups_are_admin_only_exclusive_versioned_and_do_not_change_
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["version"], 1);
     assert_eq!(saved["groups"][0]["name"], "免费");
+    assert_eq!(saved["groups"][0]["provider_ids"], json!(["provider-1"]));
     assert_eq!(
         request(http::Method::PUT)
             .json(&doc)
@@ -95,6 +99,15 @@ async fn management_groups_are_admin_only_exclusive_versioned_and_do_not_change_
         .unwrap();
     assert_eq!(current["version"], 2);
     assert_eq!(current["groups"], moved["groups"]);
+    let left = request(http::Method::PUT).json(&current).send();
+    let right = request(http::Method::PUT).json(&current).send();
+    let (left, right) = tokio::join!(left, right);
+    let mut statuses = [
+        left.unwrap().status().as_u16(),
+        right.unwrap().status().as_u16(),
+    ];
+    statuses.sort();
+    assert_eq!(statuses, [200, 409]);
     let providers = repository.list_providers(false).await.unwrap();
     assert_eq!(
         serde_json::to_value(providers).unwrap(),

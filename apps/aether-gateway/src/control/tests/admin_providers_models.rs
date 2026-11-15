@@ -741,3 +741,31 @@ fn classifies_admin_batch_delete_global_models_as_admin_proxy_route() {
     );
     assert!(!decision.is_execution_runtime_candidate());
 }
+
+#[test]
+fn management_groups_require_provider_read_or_write_permissions() {
+    use crate::control::management_token_permissions::{
+        management_token_required_permission, validate_management_token_admin_route_permission,
+    };
+    let uri: Uri = "/api/admin/provider-management-groups".parse().unwrap();
+    let headers = headers(&[]);
+    let read_only = vec!["admin:providers:read".to_string()];
+    for (method, permission, allowed) in [
+        (http::Method::GET, "admin:providers:read", true),
+        (http::Method::PUT, "admin:providers:write", false),
+    ] {
+        let decision = classify_control_route(&method, &uri, &headers).unwrap();
+        assert_eq!(decision.route_family.as_deref(), Some("providers_manage"));
+        assert_eq!(decision.route_kind.as_deref(), Some("management_groups"));
+        assert_eq!(
+            management_token_required_permission(&method, &decision).as_deref(),
+            Some(permission)
+        );
+        assert_eq!(
+            validate_management_token_admin_route_permission(&method, &decision, Some(&read_only))
+                .is_ok(),
+            allowed
+        );
+        assert!(!decision.is_execution_runtime_candidate());
+    }
+}

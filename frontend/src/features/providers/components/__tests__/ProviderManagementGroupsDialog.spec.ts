@@ -62,6 +62,21 @@ describe('Provider management groups editor', () => {
     expect(api.saveProviderManagementGroups).toHaveBeenLastCalledWith({ version: 7, groups: [] })
   })
 
+  it('preserves memberships absent from an incomplete directory when saving a rename', async () => {
+    root = document.createElement('div'); document.body.appendChild(root)
+    app = createApp(ProviderManagementGroupsDialog, { modelValue: true, document: structuredClone(initial),
+      providers: [] as ProviderWithEndpointsSummary[], onSaved: saved,
+    })
+    app.mount(root); await settle()
+    const name = document.body.querySelector<HTMLInputElement>('input[aria-label="分组名称"]')!
+    name.value = '免费改名'; name.dispatchEvent(new Event('input', { bubbles: true })); await settle()
+    await click('保存分组')
+    expect(api.saveProviderManagementGroups).toHaveBeenCalledWith({ version: 4, groups: [
+      { id: 'free', name: '免费改名', provider_ids: ['p1'] },
+      { id: 'paid', name: '付费', provider_ids: ['p2'] },
+    ] })
+  })
+
   it('cancels edits without issuing a write', async () => {
     await mountDialog()
     const deletes = [...document.body.querySelectorAll<HTMLButtonElement>('button')].filter(item => item.textContent?.trim() === '删除分组')

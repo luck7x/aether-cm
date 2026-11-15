@@ -95,8 +95,7 @@ const matching = computed(() => {
 })
 
 function reset(document: ProviderManagementGroups) {
-  const existing = new Set(props.providers.map(provider => provider.id))
-  draft.value = { version: document.version, groups: document.groups.map(group => ({ ...group, provider_ids: group.provider_ids.filter(id => existing.has(id)) })) }
+  draft.value = { version: document.version, groups: document.groups.map(group => ({ ...group, provider_ids: [...group.provider_ids] })) }
   selectedId.value = draft.value.groups[0]?.id ?? ''
   newName.value = ''
   search.value = ''
@@ -156,9 +155,8 @@ async function save() {
   busy.value = true
   error.value = ''
   try {
-    const existing = new Set(props.providers.map(provider => provider.id))
     const document = await saveProviderManagementGroups({ ...draft.value, groups: draft.value.groups.map(group => ({
-      ...group, name: group.name.trim(), provider_ids: group.provider_ids.filter(id => existing.has(id)),
+      ...group, name: group.name.trim(), provider_ids: [...group.provider_ids],
     })) })
     emit('saved', document)
     emit('update:modelValue', false)

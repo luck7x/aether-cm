@@ -58,8 +58,8 @@
           </label>
           <Button variant="outline" size="sm" :disabled="loading || managementLoading || !managementReady" @click="managementDialogOpen = true">{{ t('providers.management.manage') }}</Button>
           <template v-if="managementGrouped">
-            <Button variant="ghost" size="sm" :disabled="Boolean(searchQuery.trim())" @click="managementCollapsed = []">{{ t('providers.management.expandAll') }}</Button>
-            <Button variant="ghost" size="sm" :disabled="Boolean(searchQuery.trim())" @click="managementCollapsed = [...managementDocument.groups.map(group => group.id), UNGROUPED]">{{ t('providers.management.collapseAll') }}</Button>
+            <Button variant="ghost" size="sm" :disabled="managementFiltering" @click="managementCollapsed = []">{{ t('providers.management.expandAll') }}</Button>
+            <Button variant="ghost" size="sm" :disabled="managementFiltering" @click="managementCollapsed = [...managementDocument.groups.map(group => group.id), UNGROUPED]">{{ t('providers.management.collapseAll') }}</Button>
           </template>
           <p class="basis-full text-xs text-muted-foreground">{{ t('providers.management.hint') }}</p>
           <div v-if="managementError" role="alert" class="flex items-center gap-2 text-xs text-destructive">
@@ -174,7 +174,7 @@
                 <template #priority>
                   <div class="flex items-center gap-0.5">
                     <ProviderDragHandle
-                      v-if="!managementGrouped"
+                      v-if="!managementOrderActive"
                       :provider-name="provider.name"
                       :disabled="loading || priorityEditingDisabled || displayedProviders.length < 2"
                       @pointerdown="startDrag(provider.id, $event)"
@@ -272,7 +272,7 @@
             </template>
             <template #drag-handle>
               <ProviderDragHandle
-                v-if="!managementGrouped"
+                v-if="!managementOrderActive"
                 class="-ml-2 w-4"
                 :provider-name="provider.name"
                 :disabled="loading || priorityEditingDisabled || displayedProviders.length < 2"
@@ -417,6 +417,7 @@ const {
   toggle: toggleManagementCollapsed,
 } = useProviderManagementGroups()
 const managementDialogOpen = ref(false)
+const managementOrderActive = computed(() => !managementReady.value || Boolean(managementError.value) || managementGrouped.value)
 function onManagementGroupsSaved(document: ProviderManagementGroups) {
   replaceManagementGroups(document)
   showSuccess(t('providers.management.saved'))
@@ -717,7 +718,7 @@ const {
   () => sortGroupProviders(priorityConfig.value, filteredProviders.value),
   providerListRef,
   {
-    disabled: () => managementGrouped.value || priorityEditingDisabled.value || loading.value,
+    disabled: () => managementOrderActive.value || priorityEditingDisabled.value || loading.value,
     move(providerId, targetId) {
       const config = priorityConfig.value
       const policy = selectedPolicy.value?.policy
@@ -731,15 +732,16 @@ const {
 const directorySections = computed(() => {
   if (!managementGrouped.value) return orderedProviders.value.length
     ? [{ id: UNGROUPED, name: t('providers.management.ungrouped'), providers: orderedProviders.value }] : []
-  return managementSections(managementDocument.value.groups, orderedProviders.value, t('providers.management.ungrouped'))
+  return managementSections(managementDocument.value.groups, [...filteredProviders.value].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)), t('providers.management.ungrouped'))
     .filter(section => (managementFilter.value === 'all' || managementFilter.value === section.id)
       && ((!searchQuery.value.trim() && filterApiFormat.value === 'all') || section.providers.length > 0))
 })
+const managementFiltering = computed(() => Boolean(searchQuery.value.trim()) || filterApiFormat.value !== 'all' || managementFilter.value !== 'all')
 function isManagementCollapsed(id: string) {
-  return managementGrouped.value && !searchQuery.value.trim() && managementCollapsed.value.includes(id)
+  return managementGrouped.value && !managementFiltering.value && managementCollapsed.value.includes(id)
 }
 function toggleManagementGroup(id: string) {
-  if (!searchQuery.value.trim()) toggleManagementCollapsed(id)
+  if (!managementFiltering.value) toggleManagementCollapsed(id)
 }
 const expandedDirectoryProviders = computed(() => directorySections.value.flatMap(section => isManagementCollapsed(section.id) ? [] : section.providers))
 const displayedProviders = computed(() => {
@@ -757,7 +759,7 @@ watch(() => expandedDirectoryProviders.value.length, length => {
   currentPage.value = Math.min(currentPage.value, Math.max(1, Math.ceil(length / pageSize.value)))
 }, { immediate: true })
 watch(managementFilter, () => { currentPage.value = 1; cancelDrag() })
-watch(managementGrouped, cancelDrag)
+watch(managementOrderActive, cancelDrag)
 watch(() => [schedulingContext.value.busy, selectedPolicy.value?.scope, selectedPolicy.value?.modelNames.join('|')], () => {
   cancelDrag()
   currentPage.value = 1
