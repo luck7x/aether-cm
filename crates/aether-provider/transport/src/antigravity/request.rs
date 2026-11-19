@@ -1,5 +1,7 @@
 use serde_json::{Map, Value};
 
+mod pi_identity;
+
 use super::auth::{AntigravityRequestAuth, ANTIGRAVITY_REQUEST_USER_AGENT};
 use super::schema::{normalize_claude_unions, normalize_tool_parameters, SchemaBudget};
 
@@ -82,6 +84,7 @@ pub fn build_antigravity_safe_v1internal_request(
         inner_request.remove("model");
         inner_request.remove("safetySettings");
         inner_request.remove("safety_settings");
+        pi_identity::filter_system_instruction(&mut inner_request);
         clamp_antigravity_claude_max_output_tokens(&mut inner_request, model);
         normalize_antigravity_claude_thought_history(&mut inner_request, model);
         normalize_antigravity_builtin_tool_names(&mut inner_request);
@@ -115,6 +118,7 @@ pub fn build_antigravity_safe_v1internal_request(
     inner_request.remove("model");
     inner_request.remove("safetySettings");
     inner_request.remove("safety_settings");
+    pi_identity::filter_system_instruction(&mut inner_request);
     clamp_antigravity_claude_max_output_tokens(&mut inner_request, model);
     normalize_antigravity_claude_thought_history(&mut inner_request, model);
     normalize_antigravity_builtin_tool_names(&mut inner_request);

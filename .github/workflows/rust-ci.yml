@@ -162,6 +162,9 @@ jobs:
         run: |
           bash -n .cm/install-management-groups-update.sh
           bash -n .cm/rollback-management-groups-update.sh
+          bash -n .cm/install-compatible-binary-update.sh
+          bash -n .cm/rollback-compatible-binary-update.sh
+          python3 -B tests/compatible_binary_update_test.py
           python3 -B tests/management_groups_deploy_test.py
           python3 tests/compose_database_config_test.py
           bash tests/deploy_state_safety_test.sh
