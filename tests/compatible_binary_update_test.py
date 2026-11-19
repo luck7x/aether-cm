@@ -49,7 +49,7 @@ esac
         self.executable(self.fake / "curl", """#!/bin/sh
 test ! -f "$FIXTURE/stopped" || exit 1
 case "$(readlink -f "$FIXTURE/install/current")" in
-  */old) exit 0 ;;
+  */old) test ! -f "$FIXTURE/fail-old-health" ;;
   *) test ! -f "$FIXTURE/fail-new-health" ;;
 esac
 """)
@@ -66,7 +66,7 @@ test "$*" = 'db status' || exit 1
 if test -f "$FIXTURE/pending"; then
   echo 'pending migrations: 1'
 else
-  echo 'pending migrations: 0'
+  echo 'database postgres: ready (schema and backfills are current)'
 fi
 """)
         self.envfile = self.base / "production.env"
@@ -118,6 +118,18 @@ fi
         self.assertFalse((self.base / "stopped").exists())
         state = next((self.base / "state").iterdir())
         self.assertEqual((state / "STATUS").read_text().strip(), "rolled_back")
+
+    def test_failed_manual_rollback_recovers_the_new_program(self):
+        result = self.install_update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        new = (self.install / "current").resolve()
+        state = Path((self.base / "state/last-success").read_text().strip())
+        (self.base / "fail-old-health").touch()
+        rollback = subprocess.run(["bash", str(state / "rollback.sh")], env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(rollback.returncode, 0)
+        self.assertEqual((self.install / "current").resolve(), new)
+        self.assertFalse((self.base / "stopped").exists())
+        self.assertEqual((state / "STATUS").read_text().strip(), "rollback_failed_recovered_new")
 
     def test_pending_migration_aborts_before_stopping_service(self):
         (self.base / "pending").touch()

@@ -91,7 +91,7 @@ printf 'git_sha=%s\n' "${BUILD_SHA}" > "${RELEASE}/BUILD_INFO"
 
 log 'Checking database compatibility without migrations or a database backup'
 "${RELEASE}/bin/aether-gateway" db status > "${STATE}/db-status.log" 2>&1
-grep -Fxq 'pending migrations: 0' "${STATE}/db-status.log" || fail 'this installer requires zero pending migrations'
+grep -Fxq 'database postgres: ready (schema and backfills are current)' "${STATE}/db-status.log" || fail 'this installer requires current migrations and backfills'
 [[ "$(readlink -f "${INSTALL_ROOT}/current")" == "${OLD_TARGET}" ]]
 {
   printf 'INSTALL_ROOT=%q\n' "${INSTALL_ROOT}"
