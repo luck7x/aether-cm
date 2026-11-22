@@ -3,7 +3,6 @@ use std::future::Future;
 use std::io::Error as IoError;
 use std::time::{Duration, Instant};
 
-use aether_ai_formats::contracts::{GEMINI_CHAT_STREAM_PLAN_KIND, GEMINI_CLI_STREAM_PLAN_KIND};
 use axum::body::{Body, Bytes};
 use axum::http::StatusCode;
 use futures_util::StreamExt;
@@ -16,6 +15,7 @@ use super::{
     record_failed_usage_for_runtime_miss_request_with_committed_stream,
     CommittedStreamClientResponse, LocalExecutionRequestOutcome,
 };
+use crate::ai_serving::api::{GEMINI_CHAT_STREAM_PLAN_KIND, GEMINI_CLI_STREAM_PLAN_KIND};
 use crate::api::response::build_client_response_from_parts;
 use crate::constants::EXECUTION_PATH_LOCAL_EXECUTION_RUNTIME_MISS;
 use crate::control::GatewayControlDecision;
