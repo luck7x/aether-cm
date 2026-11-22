@@ -66,3 +66,51 @@ where
 
 mod local_chat;
 mod local_cli;
+
+fn with_heartbeat_policy(
+    data: crate::data::GatewayDataState,
+    enabled: bool,
+) -> crate::data::GatewayDataState {
+    use aether_data::repository::routing_profiles::InMemoryRoutingGroupRepository;
+    use aether_data_contracts::repository::routing_profiles::{
+        StoredRoutingGroup, StoredRoutingGroupBinding, StoredRoutingGroupVersion,
+    };
+
+    data.with_routing_group_repository_for_tests(Arc::new(InMemoryRoutingGroupRepository::seed(
+        [StoredRoutingGroup {
+            id: "heartbeat-test-default".into(),
+            name: "heartbeat-test-default".into(),
+            description: None,
+            enabled: true,
+            is_system_default: true,
+            sort_order: 0,
+            config_json: json!({"default_policy": {"enable_cf_heartbeat": enabled}}),
+            version: 1,
+            created_at: 1,
+            updated_at: 1,
+            published_at: Some(1),
+        }],
+        std::iter::empty::<StoredRoutingGroupBinding>(),
+        std::iter::empty::<StoredRoutingGroupVersion>(),
+    )))
+}
+
+async fn read_after_early_heartbeat(
+    mut response: reqwest::Response,
+    release: &tokio::sync::Notify,
+) -> String {
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), response.chunk())
+        .await
+        .expect("heartbeat must arrive while the upstream is still blocked")
+        .expect("first chunk should read")
+        .expect("heartbeat chunk must exist");
+    assert_eq!(first.as_ref(), b": aether-keepalive\n\n");
+    assert_eq!(response.headers()["content-type"], "text/event-stream");
+    assert_eq!(response.headers()["x-accel-buffering"], "no");
+    release.notify_one();
+    let mut body = first.to_vec();
+    while let Some(chunk) = response.chunk().await.expect("body should read") {
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).expect("SSE must be UTF-8")
+}

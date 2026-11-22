@@ -4,6 +4,7 @@ mod outcome;
 mod plan_fallback;
 mod policy;
 mod remote;
+mod stream_heartbeat;
 mod stream_path;
 mod sync_path;
 
@@ -21,9 +22,14 @@ pub(crate) use outcome::{
     build_fast_local_execution_exhaustion, build_fast_local_execution_runtime_miss_context,
     build_local_execution_exhaustion, build_local_execution_runtime_miss_context,
     is_deferred_upstream_response, mark_deferred_upstream_response,
-    record_failed_usage_for_deferred_response, record_failed_usage_for_exhausted_request,
-    record_failed_usage_for_runtime_miss_request, LocalExecutionExhaustion,
-    LocalExecutionRequestOutcome, LocalExecutionRuntimeMissContext,
+    record_failed_usage_for_deferred_response,
+    record_failed_usage_for_deferred_response_with_committed_stream,
+    record_failed_usage_for_exhausted_request,
+    record_failed_usage_for_exhausted_request_with_committed_stream,
+    record_failed_usage_for_runtime_miss_request,
+    record_failed_usage_for_runtime_miss_request_with_committed_stream,
+    CommittedStreamClientResponse, LocalExecutionExhaustion, LocalExecutionRequestOutcome,
+    LocalExecutionRuntimeMissContext,
 };
 pub(crate) use plan_fallback::{
     maybe_execute_stream_via_plan_fallback, maybe_execute_sync_via_plan_fallback,

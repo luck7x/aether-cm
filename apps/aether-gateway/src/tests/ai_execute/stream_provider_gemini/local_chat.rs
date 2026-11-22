@@ -14,12 +14,19 @@ use super::{
 fn gateway_executes_gemini_chat_stream_via_local_decision_gate_with_local_stream_decision() {
     run_stream_provider_gemini_test(
         "gateway_executes_gemini_chat_stream_via_local_decision_gate_with_local_stream_decision",
-        gateway_executes_gemini_chat_stream_via_local_decision_gate_with_local_stream_decision_impl,
+        || run_gemini_chat_stream(false),
     );
 }
 
-async fn gateway_executes_gemini_chat_stream_via_local_decision_gate_with_local_stream_decision_impl(
-) {
+#[test]
+fn gateway_gemini_chat_sends_heartbeat_before_upstream_response() {
+    run_stream_provider_gemini_test(
+        "gateway_gemini_chat_sends_heartbeat_before_upstream_response",
+        || run_gemini_chat_stream(true),
+    );
+}
+
+async fn run_gemini_chat_stream(heartbeat: bool) {
     #[derive(Debug, Clone)]
     struct SeenExecutionRuntimeStreamRequest {
         trace_id: String,
@@ -187,6 +194,10 @@ async fn gateway_executes_gemini_chat_stream_via_local_decision_gate_with_local_
         .expect("key transport should build")
     }
 
+    let release = Arc::new(tokio::sync::Notify::new());
+    let upstream_release = release.clone();
+    let execution_hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let upstream_hits = execution_hits.clone();
     let seen_execution_runtime = Arc::new(Mutex::new(None::<SeenExecutionRuntimeStreamRequest>));
     let seen_execution_runtime_clone = Arc::clone(&seen_execution_runtime);
     let seen_report = Arc::new(Mutex::new(false));
@@ -266,7 +277,11 @@ async fn gateway_executes_gemini_chat_stream_via_local_decision_gate_with_local_
         "/v1/execute/stream",
         any(move |request: Request| {
             let seen_execution_runtime_inner = Arc::clone(&seen_execution_runtime_clone);
+            let upstream_release = upstream_release.clone();
+            let upstream_hits = upstream_hits.clone();
             async move {
+                upstream_hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if heartbeat { upstream_release.notified().await; }
                 let (parts, body) = request.into_parts();
                 let raw_body = to_bytes(body, usize::MAX).await.expect("body should read");
                 let payload: serde_json::Value =
@@ -387,7 +402,7 @@ async fn gateway_executes_gemini_chat_stream_via_local_decision_gate_with_local_
     let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
     let gateway_state = build_state_with_execution_runtime_override(execution_runtime_url.clone())
     .with_data_state_for_tests(
-        crate::data::GatewayDataState::with_auth_candidate_selection_provider_catalog_and_request_candidate_repository_for_tests(
+        super::with_heartbeat_policy(crate::data::GatewayDataState::with_auth_candidate_selection_provider_catalog_and_request_candidate_repository_for_tests(
             auth_repository,
             candidate_selection_repository,
             provider_catalog_repository,
@@ -398,14 +413,14 @@ async fn gateway_executes_gemini_chat_stream_via_local_decision_gate_with_local_
             crate::tests::ai_execute::ai_execute_proxy_node_repository([
                 "proxy-node-gemini-chat-stream",
             ]),
-        ),
+        ), heartbeat),
     );
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build().unwrap()
         .post(format!(
-            "{gateway_url}/v1beta/models/gemini-2.5-pro:streamGenerateContent?key=client-gemini-chat-local-stream-key"
+            "{gateway_url}/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse&key=client-gemini-chat-local-stream-key"
         ))
         .header(http::header::CONTENT_TYPE, "application/json")
         .header(TRACE_ID_HEADER, "trace-gemini-chat-local-stream-1")
@@ -417,8 +432,14 @@ async fn gateway_executes_gemini_chat_stream_via_local_decision_gate_with_local_
         .expect("request should succeed");
 
     assert_eq!(response.status(), StatusCode::OK);
+    let response_text = if heartbeat {
+        super::read_after_early_heartbeat(response, &release).await
+    } else {
+        response.text().await.expect("body should read")
+    };
+    assert_eq!(execution_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(
-        strip_sse_keepalive_comments(&response.text().await.expect("body should read")),
+        strip_sse_keepalive_comments(&response_text),
         "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n"
     );
 

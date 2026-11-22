@@ -1481,12 +1481,19 @@ async fn gateway_executes_vertex_ai_gemini_cli_stream_via_local_decision_gate_wi
 fn gateway_executes_antigravity_gemini_cli_stream_via_local_decision_gate_after_oauth_refresh() {
     run_stream_provider_gemini_test(
         "gateway_executes_antigravity_gemini_cli_stream_via_local_decision_gate_after_oauth_refresh",
-        gateway_executes_antigravity_gemini_cli_stream_via_local_decision_gate_after_oauth_refresh_impl,
+        || run_antigravity_gemini_cli_stream(false),
     );
 }
 
-async fn gateway_executes_antigravity_gemini_cli_stream_via_local_decision_gate_after_oauth_refresh_impl(
-) {
+#[test]
+fn gateway_antigravity_sends_heartbeat_before_upstream_response() {
+    run_stream_provider_gemini_test(
+        "gateway_antigravity_sends_heartbeat_before_upstream_response",
+        || run_antigravity_gemini_cli_stream(true),
+    );
+}
+
+async fn run_antigravity_gemini_cli_stream(heartbeat: bool) {
     #[derive(Debug, Clone)]
     struct SeenExecutionRuntimeStreamRequest {
         trace_id: String,
@@ -1673,6 +1680,10 @@ async fn gateway_executes_antigravity_gemini_cli_stream_via_local_decision_gate_
         .expect("key transport should build")
     }
 
+    let release = Arc::new(tokio::sync::Notify::new());
+    let upstream_release = release.clone();
+    let execution_hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let upstream_hits = execution_hits.clone();
     let seen_execution_runtime = Arc::new(Mutex::new(None::<SeenExecutionRuntimeStreamRequest>));
     let seen_execution_runtime_clone = Arc::clone(&seen_execution_runtime);
     let seen_refresh = Arc::new(Mutex::new(None::<SeenRefreshRequest>));
@@ -1761,7 +1772,11 @@ async fn gateway_executes_antigravity_gemini_cli_stream_via_local_decision_gate_
         "/v1/execute/stream",
         any(move |request: Request| {
             let seen_execution_runtime_inner = Arc::clone(&seen_execution_runtime_clone);
+            let upstream_release = upstream_release.clone();
+            let upstream_hits = upstream_hits.clone();
             async move {
+                let hit = upstream_hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if heartbeat && hit == 0 { upstream_release.notified().await; }
                 let (parts, body) = request.into_parts();
                 let raw_body = to_bytes(body, usize::MAX).await.expect("body should read");
                 let payload: serde_json::Value =
@@ -1946,14 +1961,17 @@ async fn gateway_executes_antigravity_gemini_cli_stream_via_local_decision_gate_
             }),
         )]);
     let gateway_state = build_state_with_execution_runtime_override(execution_runtime_url.clone())
-        .with_data_state_for_tests(data_state)
+        .with_data_state_for_tests(super::with_heartbeat_policy(data_state, heartbeat))
         .with_oauth_refresh_coordinator_for_tests(oauth_refresh);
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap()
         .post(format!(
-            "{gateway_url}/v1beta/models/gemini-cli:streamGenerateContent"
+            "{gateway_url}/v1beta/models/gemini-cli:streamGenerateContent?alt=sse"
         ))
         .header(http::header::CONTENT_TYPE, "application/json")
         .header("user-agent", "GeminiCLI/1.0")
@@ -1968,8 +1986,13 @@ async fn gateway_executes_antigravity_gemini_cli_stream_via_local_decision_gate_
         .expect("request should succeed");
 
     assert_eq!(response.status(), StatusCode::OK);
-    let response_text =
-        strip_sse_keepalive_comments(&response.text().await.expect("body should read"));
+    let response_text = if heartbeat {
+        super::read_after_early_heartbeat(response, &release).await
+    } else {
+        response.text().await.expect("body should read")
+    };
+    assert_eq!(execution_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let response_text = strip_sse_keepalive_comments(&response_text);
     let payload = response_text
         .trim()
         .strip_prefix("data: ")

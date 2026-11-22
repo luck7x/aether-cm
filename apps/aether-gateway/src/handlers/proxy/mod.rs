@@ -784,47 +784,7 @@ fn restore_redacted_stream_execution_response(
     response: Response<Body>,
     redaction_slot: &crate::privacy::RedactionSessionSlot,
 ) -> Result<Response<Body>, GatewayError> {
-    let (mut parts, body) = response.into_parts();
-    let Some(session) = take_redaction_session_for_response(&parts.headers, redaction_slot) else {
-        return Ok(Response::from_parts(parts, body));
-    };
-    let headers = collect_response_headers(&parts.headers);
-    let _ = crate::privacy::StreamingResponseRestorer::new(&headers, &session)?;
-    replace_response_headers(&mut parts.headers, &headers)?;
-    parts.headers.remove(http::header::CONTENT_LENGTH);
-    let stream_headers = headers;
-    let stream = async_stream::stream! {
-        let mut restorer = match crate::privacy::StreamingResponseRestorer::new(&stream_headers, &session) {
-            Ok(restorer) => restorer,
-            Err(err) => {
-                yield Err(std::io::Error::other(format!("{err:?}")));
-                return;
-            }
-        };
-        let mut body_stream = body.into_data_stream();
-        while let Some(chunk) = body_stream.next().await {
-            match chunk {
-                Ok(chunk) => match restorer.push_chunk(chunk.as_ref()) {
-                    Ok(restored) if restored.is_empty() => {}
-                    Ok(restored) => yield Ok(Bytes::from(restored)),
-                    Err(err) => {
-                        yield Err(std::io::Error::other(format!("{err:?}")));
-                        return;
-                    }
-                },
-                Err(err) => {
-                    yield Err(std::io::Error::other(err.to_string()));
-                    return;
-                }
-            }
-        }
-        match restorer.finish() {
-            Ok(restored) if restored.is_empty() => {}
-            Ok(restored) => yield Ok(Bytes::from(restored)),
-            Err(err) => yield Err(std::io::Error::other(format!("{err:?}"))),
-        }
-    };
-    Ok(Response::from_parts(parts, Body::from_stream(stream)))
+    crate::privacy::restore_stream_response(response, redaction_slot)
 }
 
 fn aggregate_sync_sse_response_for_client(

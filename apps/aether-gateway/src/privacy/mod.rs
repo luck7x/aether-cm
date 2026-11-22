@@ -18,6 +18,9 @@ use sha2::Digest as _;
 
 use crate::GatewayError;
 
+mod stream_response;
+pub(crate) use stream_response::{restore_stream_response, DeferredStreamRestoration};
+
 type HmacSha256 = hmac::Hmac<sha2::Sha256>;
 
 const DEFAULT_REDACTION_TTL_SECONDS: u64 = 300;

@@ -475,6 +475,51 @@ pub(crate) async fn maybe_execute_stream_via_standard_family_decision(
         return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
+    if super::stream_heartbeat::should_wrap(
+        parts,
+        plan_kind,
+        attempt_source.routing_execution_policy(),
+    ) {
+        drop(attempt_source);
+        let execution_state = state.clone();
+        let execution_parts = parts.clone();
+        let execution_trace = trace_id.to_string();
+        let execution_decision = decision.clone();
+        let execution_body = body_json.clone();
+        let execution_kind = plan_kind.to_string();
+        let execution_tracker = transfer_tracker.clone();
+        return super::stream_heartbeat::execute_with_heartbeat(
+            state.clone(),
+            parts.clone(),
+            trace_id.to_string(),
+            decision.clone(),
+            async move {
+                let Some((source, _)) = build_standard_family_stream_attempt_source(
+                    &execution_state,
+                    &execution_parts,
+                    &execution_trace,
+                    &execution_decision,
+                    &execution_body,
+                    spec,
+                )
+                .await?
+                else {
+                    return Ok(LocalExecutionRequestOutcome::NoPath);
+                };
+                execute_stream_attempt_source_with_transfer_tracker::<AiStreamAttempt, _>(
+                    &execution_state,
+                    &execution_trace,
+                    &execution_decision,
+                    &execution_kind,
+                    source,
+                    &execution_tracker,
+                )
+                .await
+            },
+        )
+        .await;
+    }
+
     execute_stream_attempt_source_with_transfer_tracker::<AiStreamAttempt, _>(
         state,
         trace_id,
@@ -704,6 +749,51 @@ pub(crate) async fn maybe_execute_stream_via_local_same_format_provider_decision
     else {
         return Ok(LocalExecutionRequestOutcome::NoPath);
     };
+
+    if super::stream_heartbeat::should_wrap(
+        parts,
+        plan_kind,
+        attempt_source.routing_execution_policy(),
+    ) {
+        drop(attempt_source);
+        let execution_state = state.clone();
+        let execution_parts = parts.clone();
+        let execution_trace = trace_id.to_string();
+        let execution_decision = decision.clone();
+        let execution_body = body_json.clone();
+        let execution_kind = plan_kind.to_string();
+        let execution_tracker = transfer_tracker.clone();
+        return super::stream_heartbeat::execute_with_heartbeat(
+            state.clone(),
+            parts.clone(),
+            trace_id.to_string(),
+            decision.clone(),
+            async move {
+                let Some((source, _)) = build_local_same_format_stream_attempt_source(
+                    &execution_state,
+                    &execution_parts,
+                    &execution_trace,
+                    &execution_decision,
+                    &execution_body,
+                    spec,
+                )
+                .await?
+                else {
+                    return Ok(LocalExecutionRequestOutcome::NoPath);
+                };
+                execute_stream_attempt_source_with_transfer_tracker::<AiStreamAttempt, _>(
+                    &execution_state,
+                    &execution_trace,
+                    &execution_decision,
+                    &execution_kind,
+                    source,
+                    &execution_tracker,
+                )
+                .await
+            },
+        )
+        .await;
+    }
 
     execute_stream_attempt_source_with_transfer_tracker::<AiStreamAttempt, _>(
         state,

@@ -63,6 +63,27 @@ pub(crate) struct LocalExecutionRuntimeMissContext {
     candidate_contexts: Vec<RuntimeMissCandidateContext>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CommittedStreamClientResponse {
+    status_code: u16,
+    headers: Value,
+    body: Value,
+}
+
+impl CommittedStreamClientResponse {
+    pub(crate) fn gemini_sse_error(event: impl Into<String>) -> Self {
+        Self {
+            status_code: http::StatusCode::OK.as_u16(),
+            headers: json!({
+                "content-type": "text/event-stream",
+                "cache-control": "no-cache, no-transform",
+                "x-accel-buffering": "no",
+            }),
+            body: Value::String(event.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RuntimeMissCandidateContext {
     candidate: StoredRequestCandidate,
@@ -101,6 +122,22 @@ pub(crate) fn record_failed_usage_for_deferred_response<'a>(
     state: &'a AppState,
     response: &Response<Body>,
 ) -> impl std::future::Future<Output = ()> + Send + 'a {
+    record_failed_usage_for_deferred_response_inner(state, response, None)
+}
+
+pub(crate) fn record_failed_usage_for_deferred_response_with_committed_stream<'a>(
+    state: &'a AppState,
+    response: &Response<Body>,
+    client_response: CommittedStreamClientResponse,
+) -> impl std::future::Future<Output = ()> + Send + 'a {
+    record_failed_usage_for_deferred_response_inner(state, response, Some(client_response))
+}
+
+fn record_failed_usage_for_deferred_response_inner<'a>(
+    state: &'a AppState,
+    response: &Response<Body>,
+    client_response: Option<CommittedStreamClientResponse>,
+) -> impl std::future::Future<Output = ()> + Send + 'a {
     let context = response.extensions().get::<DeferredUsageContext>().cloned();
     let status_code = response.status().as_u16();
     async move {
@@ -123,7 +160,11 @@ pub(crate) fn record_failed_usage_for_deferred_response<'a>(
         data.error_category = error_category_for_failed_status(status_code)
             .or_else(|| Some("upstream_error".to_string()));
         data.response_headers = Some(json_header_map());
-        data.client_response_headers = Some(json_header_map());
+        if let Some(client_response) = client_response {
+            apply_committed_stream_client_response(&mut data, client_response);
+        } else {
+            data.client_response_headers = Some(json_header_map());
+        }
 
         state
             .usage_runtime
@@ -338,6 +379,49 @@ pub(crate) async fn record_failed_usage_for_exhausted_request(
     execution_path: &str,
     diagnostic: Option<&LocalExecutionRuntimeMissDiagnostic>,
 ) {
+    record_failed_usage_for_exhausted_request_inner(
+        state,
+        exhaustion,
+        started_at,
+        local_execution_runtime_miss_detail,
+        execution_path,
+        diagnostic,
+        None,
+    )
+    .await;
+}
+
+pub(crate) async fn record_failed_usage_for_exhausted_request_with_committed_stream(
+    state: &AppState,
+    exhaustion: LocalExecutionExhaustion,
+    started_at: &Instant,
+    local_execution_runtime_miss_detail: &str,
+    execution_path: &str,
+    diagnostic: Option<&LocalExecutionRuntimeMissDiagnostic>,
+    client_response: CommittedStreamClientResponse,
+) {
+    record_failed_usage_for_exhausted_request_inner(
+        state,
+        exhaustion,
+        started_at,
+        local_execution_runtime_miss_detail,
+        execution_path,
+        diagnostic,
+        Some(client_response),
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_failed_usage_for_exhausted_request_inner(
+    state: &AppState,
+    exhaustion: LocalExecutionExhaustion,
+    started_at: &Instant,
+    local_execution_runtime_miss_detail: &str,
+    execution_path: &str,
+    diagnostic: Option<&LocalExecutionRuntimeMissDiagnostic>,
+    client_response: Option<CommittedStreamClientResponse>,
+) {
     if !state.usage_runtime.is_enabled() {
         return;
     }
@@ -369,26 +453,30 @@ pub(crate) async fn record_failed_usage_for_exhausted_request(
         }
     }));
 
-    let mut client_headers = Map::from_iter([(
-        "content-type".to_string(),
-        Value::String("application/json".to_string()),
-    )]);
-    if let Some(reason) = diagnostic
-        .map(|value| value.reason.trim())
-        .filter(|value| !value.is_empty())
-    {
-        client_headers.insert(
-            LOCAL_EXECUTION_RUNTIME_MISS_REASON_HEADER.to_string(),
-            Value::String(reason.to_string()),
-        );
+    if let Some(client_response) = client_response {
+        apply_committed_stream_client_response(&mut data, client_response);
+    } else {
+        let mut client_headers = Map::from_iter([(
+            "content-type".to_string(),
+            Value::String("application/json".to_string()),
+        )]);
+        if let Some(reason) = diagnostic
+            .map(|value| value.reason.trim())
+            .filter(|value| !value.is_empty())
+        {
+            client_headers.insert(
+                LOCAL_EXECUTION_RUNTIME_MISS_REASON_HEADER.to_string(),
+                Value::String(reason.to_string()),
+            );
+        }
+        data.client_response_headers = Some(Value::Object(client_headers));
+        let client_message =
+            beautify_local_execution_client_error_message(local_execution_runtime_miss_detail);
+        data.client_response_body = Some(runtime_miss_client_error_body(
+            data.api_format.as_deref(),
+            &client_message,
+        ));
     }
-    data.client_response_headers = Some(Value::Object(client_headers));
-    let client_message =
-        beautify_local_execution_client_error_message(local_execution_runtime_miss_detail);
-    data.client_response_body = Some(runtime_miss_client_error_body(
-        data.api_format.as_deref(),
-        &client_message,
-    ));
 
     let mut request_metadata = match data.request_metadata.take() {
         Some(Value::Object(object)) => object,
@@ -439,6 +527,70 @@ pub(crate) async fn record_failed_usage_for_runtime_miss_request(
     request_headers: &HeaderMap,
     request_body: Option<&Bytes>,
 ) {
+    record_failed_usage_for_runtime_miss_request_inner(
+        state,
+        request_id,
+        started_at,
+        local_execution_runtime_miss_detail,
+        execution_path,
+        decision,
+        diagnostic,
+        context,
+        request_headers,
+        request_body,
+        http::StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+        None,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn record_failed_usage_for_runtime_miss_request_with_committed_stream(
+    state: &AppState,
+    request_id: &str,
+    started_at: &Instant,
+    local_execution_runtime_miss_detail: &str,
+    execution_path: &str,
+    decision: Option<&GatewayControlDecision>,
+    diagnostic: Option<&LocalExecutionRuntimeMissDiagnostic>,
+    context: &LocalExecutionRuntimeMissContext,
+    request_headers: &HeaderMap,
+    request_body: Option<&Bytes>,
+    semantic_status_code: u16,
+    client_response: CommittedStreamClientResponse,
+) {
+    record_failed_usage_for_runtime_miss_request_inner(
+        state,
+        request_id,
+        started_at,
+        local_execution_runtime_miss_detail,
+        execution_path,
+        decision,
+        diagnostic,
+        context,
+        request_headers,
+        request_body,
+        semantic_status_code,
+        Some(client_response),
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_failed_usage_for_runtime_miss_request_inner(
+    state: &AppState,
+    request_id: &str,
+    started_at: &Instant,
+    local_execution_runtime_miss_detail: &str,
+    execution_path: &str,
+    decision: Option<&GatewayControlDecision>,
+    diagnostic: Option<&LocalExecutionRuntimeMissDiagnostic>,
+    context: &LocalExecutionRuntimeMissContext,
+    request_headers: &HeaderMap,
+    request_body: Option<&Bytes>,
+    semantic_status_code: u16,
+    client_response: Option<CommittedStreamClientResponse>,
+) {
     if !state.usage_runtime.is_enabled() {
         return;
     }
@@ -467,7 +619,7 @@ pub(crate) async fn record_failed_usage_for_runtime_miss_request(
         .and_then(|value| value.selected_provider_model_name.clone())
         .filter(|value| !value.eq_ignore_ascii_case(model.as_str()));
 
-    let status_code = http::StatusCode::SERVICE_UNAVAILABLE.as_u16();
+    let status_code = semantic_status_code;
     let client_message =
         beautify_local_execution_client_error_message(local_execution_runtime_miss_detail);
     let client_body = runtime_miss_client_error_body(api_format.as_deref(), &client_message);
@@ -559,6 +711,9 @@ pub(crate) async fn record_failed_usage_for_runtime_miss_request(
     );
     data.request_metadata =
         (!request_metadata.is_empty()).then_some(Value::Object(request_metadata));
+    if let Some(client_response) = client_response {
+        apply_committed_stream_client_response(&mut data, client_response);
+    }
 
     state
         .usage_runtime
@@ -740,6 +895,29 @@ fn error_category_for_failed_status(status_code: u16) -> Option<String> {
     } else {
         None
     }
+}
+
+fn apply_committed_stream_client_response(
+    data: &mut UsageEventData,
+    client_response: CommittedStreamClientResponse,
+) {
+    let CommittedStreamClientResponse {
+        status_code,
+        headers,
+        body,
+    } = client_response;
+    let mut request_metadata = match data.request_metadata.take() {
+        Some(Value::Object(object)) => object,
+        Some(other) => Map::from_iter([("seed".to_string(), other)]),
+        None => Map::new(),
+    };
+    request_metadata.insert(
+        "client_response_status_code".to_string(),
+        Value::from(status_code),
+    );
+    data.request_metadata = Some(Value::Object(request_metadata));
+    data.client_response_headers = Some(headers);
+    data.client_response_body = Some(body);
 }
 
 fn json_header_map() -> Value {
@@ -1209,20 +1387,29 @@ fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_runtime_miss_usage_routing, beautify_local_execution_client_error_message,
+        apply_committed_stream_client_response, apply_runtime_miss_usage_routing,
+        beautify_local_execution_client_error_message,
         insert_runtime_miss_candidate_usage_metadata,
         request_candidate_represents_provider_execution, runtime_miss_client_error_body,
         runtime_miss_original_headers_json, select_last_runtime_miss_executed_candidate,
-        select_last_runtime_miss_routing_candidate, LocalExecutionRuntimeMissContext,
-        RuntimeMissCandidateContext,
+        select_last_runtime_miss_routing_candidate, CommittedStreamClientResponse,
+        LocalExecutionRuntimeMissContext, RuntimeMissCandidateContext,
     };
     use crate::constants::EXECUTION_PATH_LOCAL_EXECUTION_RUNTIME_MISS;
     use crate::state::LocalExecutionRuntimeMissDiagnostic;
+    use aether_data::repository::usage::InMemoryUsageReadRepository;
     use aether_data_contracts::repository::candidates::{
         RequestCandidateStatus, StoredRequestCandidate,
     };
+    use aether_data_contracts::repository::usage::UsageReadRepository;
     use aether_usage_runtime::UsageEventData;
+    use aether_usage_runtime::UsageRuntimeConfig;
+    use axum::body::Body;
+    use axum::http::{Response, StatusCode};
     use serde_json::{json, Map, Value};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::time::Instant;
 
     #[test]
     fn local_execution_client_error_message_is_client_friendly() {
@@ -1279,6 +1466,227 @@ mod tests {
         let openai = runtime_miss_client_error_body(Some("openai:chat"), "busy");
         assert_eq!(openai["error"]["type"], "http_error");
         assert!(openai.get("type").is_none());
+    }
+
+    #[test]
+    fn committed_gemini_stream_transport_preserves_semantic_failure_status() {
+        let event =
+            "data: {\"error\":{\"code\":503,\"message\":\"retry\",\"status\":\"UNAVAILABLE\"}}\n\n";
+        let mut data = UsageEventData {
+            status_code: Some(503),
+            request_metadata: Some(
+                json!({"analytics_failure": {"reason": "candidates_exhausted"}}),
+            ),
+            ..UsageEventData::default()
+        };
+
+        apply_committed_stream_client_response(
+            &mut data,
+            CommittedStreamClientResponse::gemini_sse_error(event),
+        );
+
+        assert_eq!(data.status_code, Some(503));
+        assert_eq!(
+            data.request_metadata
+                .as_ref()
+                .and_then(|value| value.get("client_response_status_code")),
+            Some(&json!(200))
+        );
+        assert_eq!(
+            data.client_response_headers.as_ref(),
+            Some(&json!({
+                "content-type": "text/event-stream",
+                "cache-control": "no-cache, no-transform",
+                "x-accel-buffering": "no",
+            }))
+        );
+        assert_eq!(
+            data.client_response_body,
+            Some(Value::String(event.to_string()))
+        );
+    }
+
+    #[test]
+    fn committed_stream_transport_retains_non_object_metadata_seed() {
+        let mut data = UsageEventData {
+            request_metadata: Some(json!("legacy-seed")),
+            ..UsageEventData::default()
+        };
+
+        apply_committed_stream_client_response(
+            &mut data,
+            CommittedStreamClientResponse::gemini_sse_error("data: {}\n\n"),
+        );
+
+        assert_eq!(
+            data.request_metadata.as_ref().unwrap()["seed"],
+            "legacy-seed"
+        );
+        assert_eq!(
+            data.request_metadata.as_ref().unwrap()["client_response_status_code"],
+            200
+        );
+    }
+
+    fn committed_stream_usage_test_state() -> (crate::AppState, Arc<InMemoryUsageReadRepository>) {
+        let usage_repository = Arc::new(InMemoryUsageReadRepository::default());
+        let state = crate::AppState::new()
+            .expect("state should build")
+            .with_data_state_for_tests(
+                crate::data::GatewayDataState::with_usage_repository_for_tests(Arc::clone(
+                    &usage_repository,
+                )),
+            )
+            .with_usage_runtime_for_tests(UsageRuntimeConfig {
+                enabled: true,
+                ..UsageRuntimeConfig::default()
+            });
+        (state, usage_repository)
+    }
+
+    fn committed_stream_usage_test_plan(request_id: &str) -> aether_contracts::ExecutionPlan {
+        aether_contracts::ExecutionPlan {
+            request_id: request_id.to_string(),
+            candidate_id: Some(format!("candidate-{request_id}")),
+            provider_name: Some("Antigravity".to_string()),
+            provider_id: "provider-antigravity".to_string(),
+            endpoint_id: "endpoint-antigravity".to_string(),
+            key_id: "key-antigravity".to_string(),
+            method: "POST".to_string(),
+            url: "https://antigravity.example/v1internal:streamGenerateContent".to_string(),
+            headers: BTreeMap::new(),
+            content_type: Some("application/json".to_string()),
+            content_encoding: None,
+            body: aether_contracts::RequestBody::from_json(json!({"model": "gemini-test"})),
+            stream: true,
+            client_api_format: "gemini:generate_content".to_string(),
+            provider_api_format: "gemini:generate_content".to_string(),
+            model_name: Some("gemini-test".to_string()),
+            proxy: None,
+            transport_profile: None,
+            timeouts: None,
+        }
+    }
+
+    async fn assert_committed_stream_usage(
+        repository: &InMemoryUsageReadRepository,
+        request_id: &str,
+        semantic_status_code: u16,
+        event: &str,
+    ) {
+        let stored = repository
+            .find_by_request_id(request_id)
+            .await
+            .expect("usage lookup should succeed")
+            .expect("terminal usage should be stored");
+        assert_eq!(stored.status, "failed");
+        assert_eq!(stored.billing_status, "void");
+        assert_eq!(stored.status_code, Some(semantic_status_code));
+        assert_eq!(
+            stored
+                .request_metadata
+                .as_ref()
+                .and_then(|value| value.get("client_response_status_code")),
+            Some(&json!(200))
+        );
+        assert_eq!(
+            stored
+                .client_response_headers
+                .as_ref()
+                .and_then(|value| value.get("content-type")),
+            Some(&json!("text/event-stream"))
+        );
+        if let Some(body) = stored.client_response_body.as_ref() {
+            assert_eq!(body, &Value::String(event.to_string()));
+        }
+        assert_eq!(
+            repository
+                .list_by_ids(std::slice::from_ref(&stored.id))
+                .await
+                .expect("usage list should succeed")
+                .len(),
+            1,
+            "the in-memory repository exposes one final row per request id"
+        );
+    }
+
+    #[tokio::test]
+    async fn committed_stream_deferred_failure_persists_semantic_and_client_transport() {
+        let request_id = "heartbeat-accounting-deferred";
+        let event = "data: {\"error\":{\"code\":429,\"message\":\"retry\",\"status\":\"RESOURCE_EXHAUSTED\"}}\n\n";
+        let (state, repository) = committed_stream_usage_test_state();
+        let plan = committed_stream_usage_test_plan(request_id);
+        let mut response = Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .body(Body::empty())
+            .expect("response should build");
+        super::attach_deferred_usage_context(&mut response, &plan, None);
+
+        super::record_failed_usage_for_deferred_response_with_committed_stream(
+            &state,
+            &response,
+            CommittedStreamClientResponse::gemini_sse_error(event),
+        )
+        .await;
+
+        assert_committed_stream_usage(repository.as_ref(), request_id, 429, event).await;
+    }
+
+    #[tokio::test]
+    async fn committed_stream_exhaustion_persists_semantic_and_client_transport() {
+        let request_id = "heartbeat-accounting-exhausted";
+        let event =
+            "data: {\"error\":{\"code\":503,\"message\":\"retry\",\"status\":\"UNAVAILABLE\"}}\n\n";
+        let (state, repository) = committed_stream_usage_test_state();
+        let plan = committed_stream_usage_test_plan(request_id);
+        let exhaustion = super::build_fast_local_execution_exhaustion(&plan, None);
+
+        super::record_failed_usage_for_exhausted_request_with_committed_stream(
+            &state,
+            exhaustion,
+            &Instant::now(),
+            "Gemini stream exhausted all candidates",
+            EXECUTION_PATH_LOCAL_EXECUTION_RUNTIME_MISS,
+            None,
+            CommittedStreamClientResponse::gemini_sse_error(event),
+        )
+        .await;
+
+        assert_committed_stream_usage(repository.as_ref(), request_id, 503, event).await;
+    }
+
+    #[tokio::test]
+    async fn committed_stream_runtime_miss_persists_semantic_and_client_transport() {
+        let request_id = "heartbeat-accounting-runtime-miss";
+        let event = "data: {\"error\":{\"code\":502,\"message\":\"gateway error\",\"status\":\"INTERNAL\"}}\n\n";
+        let (state, repository) = committed_stream_usage_test_state();
+        let decision = crate::control::GatewayControlDecision::synthetic(
+            "/v1internal:streamGenerateContent?alt=sse",
+            Some("ai_public".to_string()),
+            Some("gemini".to_string()),
+            Some("generate_content".to_string()),
+            Some("gemini:generate_content".to_string()),
+        );
+        let context = super::build_fast_local_execution_runtime_miss_context(Some(&decision));
+        let headers = http::HeaderMap::new();
+
+        super::record_failed_usage_for_runtime_miss_request_with_committed_stream(
+            &state,
+            request_id,
+            &Instant::now(),
+            "Gateway failed while waiting for the upstream response",
+            EXECUTION_PATH_LOCAL_EXECUTION_RUNTIME_MISS,
+            Some(&decision),
+            None,
+            &context,
+            &headers,
+            None,
+            502,
+            CommittedStreamClientResponse::gemini_sse_error(event),
+        )
+        .await;
+
+        assert_committed_stream_usage(repository.as_ref(), request_id, 502, event).await;
     }
 
     #[test]
