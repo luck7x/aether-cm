@@ -371,7 +371,7 @@ fn existing_v1internal_request_type(source: &Map<String, Value>) -> Option<&str>
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use super::{
         build_antigravity_safe_v1internal_request, classify_antigravity_safe_request_body,

@@ -1227,6 +1227,11 @@ pub fn maybe_build_standard_cross_format_sync_product(
     } else {
         return None;
     };
+    if api_format_is_gemini_generate_content(&client_api_format)
+        && !gemini_generate_content_body_has_visible_output(&client_body_json)
+    {
+        return None;
+    }
     let client_body_json =
         client_body_with_report_context_model(client_body_json, report_context, &client_api_format);
 

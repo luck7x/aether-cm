@@ -1287,8 +1287,10 @@ async fn gateway_records_gemini_stream_usage_and_pricing_with_cache_read_tokens_
         cache_creation_ephemeral_1h_tokens: 0,
         cache_read_tokens: 30,
     };
-    let stream_body =
-        ["data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hello\"}]}}]}\n\n"];
+    let stream_body = [concat!(
+        "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hello\"}]},",
+        "\"finishReason\":\"STOP\"}]}\n\n",
+    )];
     let frames = build_stream_frames(
         &stream_body,
         standardized_usage_json(expected),

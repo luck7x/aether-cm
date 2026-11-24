@@ -190,6 +190,22 @@ pub fn encode_done_sse() -> Vec<u8> {
     b"data: [DONE]\n\n".to_vec()
 }
 
+pub fn encode_json_sse(
+    event: Option<&str>,
+    value: &Value,
+) -> Result<Vec<u8>, AiSurfaceFinalizeError> {
+    let mut out = Vec::new();
+    if let Some(event) = event.filter(|value| !value.trim().is_empty()) {
+        out.extend_from_slice(b"event: ");
+        out.extend_from_slice(event.as_bytes());
+        out.push(b'\n');
+    }
+    out.extend_from_slice(b"data: ");
+    out.extend(serde_json::to_vec(value).map_err(AiSurfaceFinalizeError::from)?);
+    out.extend_from_slice(b"\n\n");
+    Ok(out)
+}
+
 #[cfg(test)]
 mod record_tests {
     use super::*;
@@ -233,20 +249,4 @@ mod record_tests {
             assert_eq!(output, vec![b"ok".to_vec()]);
         }
     }
-}
-
-pub fn encode_json_sse(
-    event: Option<&str>,
-    value: &Value,
-) -> Result<Vec<u8>, AiSurfaceFinalizeError> {
-    let mut out = Vec::new();
-    if let Some(event) = event.filter(|value| !value.trim().is_empty()) {
-        out.extend_from_slice(b"event: ");
-        out.extend_from_slice(event.as_bytes());
-        out.push(b'\n');
-    }
-    out.extend_from_slice(b"data: ");
-    out.extend(serde_json::to_vec(value).map_err(AiSurfaceFinalizeError::from)?);
-    out.extend_from_slice(b"\n\n");
-    Ok(out)
 }
