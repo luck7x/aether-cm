@@ -3876,10 +3876,10 @@ fn try_aggregate_gemini_stream_sync_response(
             model_version = Some(Value::String(frame.model.clone()));
         }
         match frame.event {
-            CanonicalStreamEvent::UnknownEvent(payload) => {
-                if strict || openai_stream_payload_is_terminal_error(&payload) {
-                    return Err(unsupported_stream_event_finalize_error(&payload));
-                }
+            CanonicalStreamEvent::UnknownEvent(payload)
+                if strict || openai_stream_payload_is_terminal_error(&payload) =>
+            {
+                return Err(unsupported_stream_event_finalize_error(&payload));
             }
             CanonicalStreamEvent::Finish {
                 finish_reason: frame_finish_reason,

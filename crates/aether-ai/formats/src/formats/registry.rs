@@ -5778,7 +5778,7 @@ mod tests {
             let declarations = tools
                 .iter()
                 .filter_map(|tool| tool.get("functionDeclarations"))
-                .filter_map(Value::as_array)
+                .filter_map(serde_json::Value::as_array)
                 .flatten()
                 .collect::<Vec<_>>();
             assert_eq!(declarations.len(), 1, "{tools:?}");

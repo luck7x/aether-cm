@@ -262,6 +262,7 @@ pub fn build_cross_format_openai_chat_request_body(
 
 /// Provider-aware entry point for gateway Chat planners. Keep private schema
 /// conversion policy in the format crate while retaining legacy behavior elsewhere.
+#[allow(clippy::too_many_arguments)]
 pub fn build_cross_format_openai_chat_request_body_with_provider_context(
     body_json: &Value,
     mapped_model: &str,
