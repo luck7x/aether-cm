@@ -15,6 +15,7 @@ readonly BUILD_SHA="${AETHER_EXPECTED_BUILD_SHA:?Expected commit SHA required}"
 readonly BINARY_SHA="${AETHER_EXPECTED_GATEWAY_SHA256:?Trusted binary digest required}"
 readonly FRONTEND="${AETHER_VERIFIED_FRONTEND:-}"
 readonly FRONTEND_SHA="${AETHER_EXPECTED_FRONTEND_SHA256:-}"
+readonly EXPECTED_OLD_TARGET="${AETHER_EXPECTED_CURRENT_RELEASE:-}"
 readonly RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 readonly STATE="${STATE_ROOT}/${RUN_ID}"
 readonly OLD_TARGET="$(readlink -f "${INSTALL_ROOT}/current")"
@@ -34,9 +35,16 @@ health() {
     curl -fsS --max-time 3 "http://127.0.0.1:${APP_LISTEN_PORT}/readyz" >/dev/null 2>&1
 }
 switch_to() {
-  local temporary="${INSTALL_ROOT}/.compatible-switch-${RUN_ID}"
-  ln -s "$1" "${temporary}"
-  mv -Tf "${temporary}" "${INSTALL_ROOT}/current"
+  local staging
+  staging="$(mktemp -d -- "${INSTALL_ROOT}/.compatible-switch-${RUN_ID}.XXXXXX")" || return 1
+  if ln -s -- "$1" "${staging}/current" &&
+     mv -Tf -- "${staging}/current" "${INSTALL_ROOT}/current"; then
+    rmdir -- "${staging}" || log 'Could not remove empty release switch directory'
+    return 0
+  fi
+  [[ ! -L "${staging}/current" ]] || unlink -- "${staging}/current" || true
+  rmdir -- "${staging}" || true
+  return 1
 }
 wait_healthy() {
   for _ in $(seq 1 45); do
@@ -75,6 +83,8 @@ if [[ -n "${FRONTEND}${FRONTEND_SHA}" ]]; then
 fi
 exec 9>"${AETHER_INSTALL_LOCK:-/run/lock/aether-cm-install.lock}"
 flock -n 9 || fail 'another deployment is running'
+[[ -z "${EXPECTED_OLD_TARGET}" || "${OLD_TARGET}" == "${EXPECTED_OLD_TARGET}" ]] ||
+  fail 'production release changed before installation'
 [[ -f "${ENV_FILE}" && -d "${OLD_TARGET}/frontend" && -x "${OLD_TARGET}/bin/aether-gateway" ]]
 [[ -f "${BINARY}" && ! -L "${BINARY}" ]]
 [[ -x "${SCRIPT_ROOT}/rollback-compatible-binary-update.sh" ]]

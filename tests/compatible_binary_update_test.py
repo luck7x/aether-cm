@@ -36,6 +36,17 @@ class CompatibleBinaryUpdateTest(unittest.TestCase):
             self.executable(self.tools / name, text)
         self.executable(self.fake / "id", "#!/bin/sh\necho 0\n")
         self.executable(self.fake / "sleep", "#!/bin/sh\nexit 0\n")
+        self.executable(self.fake / "mv", """#!/bin/sh
+case "$*" in
+  *".compatible-switch-"*"/current "*"install/current")
+    if test -f "$FIXTURE/fail-first-switch"; then
+      rm -f "$FIXTURE/fail-first-switch"
+      exit 1
+    fi
+    ;;
+esac
+exec /usr/bin/mv "$@"
+""")
         self.executable(self.fake / "systemctl", """#!/bin/sh
 printf '%s\n' "$*" >> "$FIXTURE/service.log"
 case "$1" in
@@ -123,6 +134,17 @@ fi
         state = next((self.base / "state").iterdir())
         self.assertEqual((state / "STATUS").read_text().strip(), "rolled_back")
 
+    def test_failed_release_link_switch_still_restarts_old_service(self):
+        fail_switch = self.base / "fail-first-switch"
+        fail_switch.touch()
+        result = self.install_update()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(fail_switch.exists())
+        self.assertEqual((self.install / "current").resolve(), self.old)
+        self.assertFalse((self.base / "stopped").exists())
+        state = next((self.base / "state").iterdir())
+        self.assertEqual((state / "STATUS").read_text().strip(), "rolled_back")
+
     def test_matching_frontend_switches_and_rolls_back_with_gateway(self):
         frontend = self.base / "verified-frontend"
         frontend.mkdir()
@@ -177,6 +199,14 @@ fi
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual((self.install / "current").resolve(), self.old)
         self.assertNotIn("stop ", (self.base / "service.log").read_text())
+
+
+    def test_unexpected_running_release_aborts_before_stopping_service(self):
+        self.env["AETHER_EXPECTED_CURRENT_RELEASE"] = str(self.old.parent / "different-release")
+        result = self.install_update()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.install / "current").resolve(), self.old)
+        self.assertFalse((self.base / "service.log").exists())
 
 
 if __name__ == "__main__":
