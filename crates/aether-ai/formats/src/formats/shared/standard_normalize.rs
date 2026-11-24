@@ -11,7 +11,7 @@ use crate::protocol::canonical::{
     openai_responses_input_to_canonical_messages, CanonicalContentBlock,
 };
 
-fn is_responses_shaped_body_on_chat_endpoint(body_json: &Value) -> bool {
+pub(super) fn is_responses_shaped_body_on_chat_endpoint(body_json: &Value) -> bool {
     body_json
         .as_object()
         .is_some_and(|object| !object.contains_key("messages") && object.contains_key("input"))
@@ -341,7 +341,17 @@ fn build_chat_cross_format_body(
         }
         RequestConversionKind::ToGeminiStandard => {
             let chat_body = chat_compatible_body_for_openai_chat_endpoint(body_json, &ctx)?;
-            convert_request("openai:chat", provider_api_format, chat_body.as_ref(), &ctx).ok()?
+            let mut gemini_body =
+                convert_request("openai:chat", provider_api_format, chat_body.as_ref(), &ctx)
+                    .ok()?;
+            if is_responses_shaped_body_on_chat_endpoint(body_json) {
+                restore_gemini_tool_signatures_from_openai_responses(
+                    &mut gemini_body,
+                    body_json,
+                    None,
+                );
+            }
+            gemini_body
         }
         RequestConversionKind::ToOpenAiResponses => {
             if is_responses_shaped_body_on_chat_endpoint(body_json) {
@@ -726,7 +736,10 @@ mod tests {
 
     #[test]
     fn responses_to_gemini_chat_hop_keeps_replayed_tool_signatures() {
-        use crate::api::build_cross_format_openai_responses_request_body_with_provider_context as responses;
+        use crate::api::{
+            build_cross_format_openai_chat_request_body_with_provider_context as chat,
+            build_cross_format_openai_responses_request_body_with_provider_context as responses,
+        };
         use crate::formats::openai::responses::{
             encode_gemini_tool_signature_carrier_with_direction,
             GeminiToolSignatureCarrierDirection,
@@ -757,36 +770,50 @@ mod tests {
                 "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}]
         });
         for provider in ["antigravity", "gemini"] {
-            let output = responses(
-                &input,
-                "gemini-test",
-                "openai:responses",
-                provider,
-                "gemini:generate_content",
-                true,
-                false,
-                Some("signature-test"),
-                false,
-            )
-            .unwrap();
-            let signatures = output["contents"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .flat_map(|content| content["parts"].as_array().unwrap())
-                .filter(|part| part.get("functionCall").is_some())
-                .map(|part| {
-                    (
-                        part["functionCall"]["id"].as_str().unwrap(),
-                        part["thoughtSignature"].as_str().unwrap(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(
-                signatures,
-                vec![("call_a", "sig-a"), ("call_b", "sig-b")],
-                "{provider}"
-            );
+            let outputs = [
+                responses(
+                    &input,
+                    "gemini-test",
+                    "openai:responses",
+                    provider,
+                    "gemini:generate_content",
+                    true,
+                    false,
+                    Some("signature-test"),
+                    false,
+                ),
+                chat(
+                    &input,
+                    "gemini-test",
+                    provider,
+                    "gemini:generate_content",
+                    true,
+                    false,
+                    Some("signature-test"),
+                    false,
+                ),
+            ];
+            for output in outputs {
+                let output = output.unwrap();
+                let signatures = output["contents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|content| content["parts"].as_array().unwrap())
+                    .filter(|part| part.get("functionCall").is_some())
+                    .map(|part| {
+                        (
+                            part["functionCall"]["id"].as_str().unwrap(),
+                            part["thoughtSignature"].as_str().unwrap(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    signatures,
+                    vec![("call_a", "sig-a"), ("call_b", "sig-b")],
+                    "{provider}"
+                );
+            }
         }
     }
 

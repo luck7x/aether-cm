@@ -49,8 +49,12 @@ esac
         self.executable(self.fake / "curl", """#!/bin/sh
 test ! -f "$FIXTURE/stopped" || exit 1
 case "$(readlink -f "$FIXTURE/install/current")" in
-  */old) test ! -f "$FIXTURE/fail-old-health" ;;
-  *) test ! -f "$FIXTURE/fail-new-health" ;;
+  */old) test ! -f "$FIXTURE/fail-old-health" || exit 1 ;;
+  *) test ! -f "$FIXTURE/fail-new-health" || exit 1 ;;
+esac
+case "$*" in
+  */health|*/readyz) ;;
+  */) cat "$FIXTURE/install/current/frontend/index.html" ;;
 esac
 """)
         self.executable(self.fake / "sha256sum", """#!/bin/sh
@@ -118,6 +122,35 @@ fi
         self.assertFalse((self.base / "stopped").exists())
         state = next((self.base / "state").iterdir())
         self.assertEqual((state / "STATUS").read_text().strip(), "rolled_back")
+
+    def test_matching_frontend_switches_and_rolls_back_with_gateway(self):
+        frontend = self.base / "verified-frontend"
+        frontend.mkdir()
+        index = b"new frontend"
+        (frontend / "index.html").write_bytes(index)
+        manifest = f"{hashlib.sha256(index).hexdigest()}  ./index.html\n"
+        self.env["AETHER_VERIFIED_FRONTEND"] = str(frontend)
+        self.env["AETHER_EXPECTED_FRONTEND_SHA256"] = hashlib.sha256(manifest.encode()).hexdigest()
+        result = self.install_update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.install / "current/frontend/index.html").read_bytes(), index)
+        state = Path((self.base / "state/last-success").read_text().strip())
+        rollback = subprocess.run(
+            ["bash", str(state / "rollback.sh")], env=self.env, text=True, capture_output=True,
+        )
+        self.assertEqual(rollback.returncode, 0, rollback.stdout + rollback.stderr)
+        self.assertEqual((self.install / "current/frontend/index.html").read_text(), "old frontend")
+
+    def test_unverified_frontend_aborts_before_stopping_service(self):
+        frontend = self.base / "unverified-frontend"
+        frontend.mkdir()
+        (frontend / "index.html").write_text("unverified")
+        self.env["AETHER_VERIFIED_FRONTEND"] = str(frontend)
+        self.env["AETHER_EXPECTED_FRONTEND_SHA256"] = "0" * 64
+        result = self.install_update()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.install / "current").resolve(), self.old)
+        self.assertFalse((self.base / "service.log").exists())
 
     def test_failed_manual_rollback_recovers_the_new_program(self):
         result = self.install_update()

@@ -479,10 +479,12 @@ pub(crate) fn admin_pool_cycle_window_spec(
                 .or_else(labelled_minutes)?;
             // Calendar months vary in length, so a monthly cycle is only
             // summarized from the period start xAI reports.
-            if spec.window_minutes != 10_080
-                && admin_pool_json_to_u64(window.get("period_start_at")).is_none()
-            {
-                return None;
+            if spec.window_minutes != 10_080 {
+                let start_at = admin_pool_json_to_u64(window.get("period_start_at"))?;
+                let reset_at = admin_pool_json_to_u64(window.get("reset_at"))?;
+                if start_at >= reset_at {
+                    return None;
+                }
             }
         }
         "antigravity" => {

@@ -963,6 +963,8 @@ mod tests {
         for window in [
             json!({"code": "usage", "scope": "account", "window": "monthly", "reset_at": reset_at}),
             json!({"code": "usage", "scope": "account", "label": "月额度", "reset_at": reset_at}),
+            json!({"code": "usage", "scope": "account", "window": "monthly", "reset_at": reset_at, "period_start_at": reset_at}),
+            json!({"code": "usage", "scope": "account", "window": "monthly", "reset_at": reset_at, "period_start_at": reset_at + 1}),
         ] {
             assert!(admin_pool_cycle_usage_request(
                 "xai",
