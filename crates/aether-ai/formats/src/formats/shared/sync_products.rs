@@ -175,6 +175,9 @@ fn project_validated_openai_responses_stream_sync_product(
         &client_api_format,
         report_context,
     )?;
+    if !cross_format_client_body_is_valid(&client_api_format, &client_body_json) {
+        return None;
+    }
     let client_body_json =
         client_body_with_report_context_model(client_body_json, report_context, &client_api_format);
     Some(StandardCrossFormatSyncProduct {
@@ -1177,6 +1180,20 @@ fn api_format_is_gemini_generate_content(api_format: &str) -> bool {
     aether_ai_formats::normalize_api_format_alias(api_format) == "gemini:generate_content"
 }
 
+fn cross_format_client_body_is_valid(client_api_format: &str, body: &Value) -> bool {
+    !api_format_is_gemini_generate_content(client_api_format)
+        || gemini_generate_content_body_has_visible_output(body)
+        || body
+            .get("candidates")
+            .and_then(Value::as_array)
+            .is_some_and(|candidates| {
+                // A converted refusal has a meaningful terminal result without content.
+                candidates
+                    .iter()
+                    .any(|candidate| candidate["finishReason"] == "SAFETY")
+            })
+}
+
 pub fn maybe_build_standard_cross_format_sync_product(
     report_kind: &str,
     provider_api_format: &str,
@@ -1227,9 +1244,7 @@ pub fn maybe_build_standard_cross_format_sync_product(
     } else {
         return None;
     };
-    if api_format_is_gemini_generate_content(&client_api_format)
-        && !gemini_generate_content_body_has_visible_output(&client_body_json)
-    {
+    if !cross_format_client_body_is_valid(&client_api_format, &client_body_json) {
         return None;
     }
     let client_body_json =
@@ -7658,6 +7673,62 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("response.future.delta"));
+    }
+
+    #[test]
+    fn sync_finalize_rejects_empty_responses_stream_for_gemini_client() {
+        let context = json!({
+            "provider_api_format": "openai:responses",
+            "client_api_format": "gemini:generate_content",
+            "needs_conversion": true,
+        });
+        let stream = concat!(
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty\",",
+            "\"status\":\"completed\",\"model\":\"m\",\"output\":[]}}\n\n",
+        );
+        let body_base64 = base64::engine::general_purpose::STANDARD.encode(stream);
+        let product = maybe_build_standard_sync_finalize_product_from_normalized_payload(
+            "gemini_chat_sync_finalize",
+            200,
+            Some(&context),
+            None,
+            Some(&body_base64),
+        )
+        .expect("the terminal event is well-formed");
+        assert!(
+            product.is_none(),
+            "unrepresentable empty response: {product:?}"
+        );
+    }
+
+    #[test]
+    fn sync_finalize_preserves_an_explicit_gemini_safety_terminal_without_text() {
+        let context = json!({
+            "provider_api_format": "openai:chat",
+            "client_api_format": "gemini:generate_content",
+            "needs_conversion": true,
+        });
+        let body = json!({
+            "id": "chatcmpl_filtered",
+            "model": "m",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": null },
+                "finish_reason": "content_filter"
+            }]
+        });
+        let product = maybe_build_standard_cross_format_sync_product(
+            "gemini_chat_sync_finalize",
+            "openai:chat",
+            "gemini:generate_content",
+            &context,
+            body,
+        )
+        .expect("an explicit refusal is a valid Gemini terminal response");
+        assert_eq!(
+            product.client_body_json["candidates"][0]["finishReason"],
+            "SAFETY"
+        );
     }
 
     #[test]
