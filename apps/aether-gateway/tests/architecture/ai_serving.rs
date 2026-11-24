@@ -5021,7 +5021,7 @@ fn retired_api_format_occurrences_are_whitelisted() {
         "apps/aether-gateway/src/handlers/admin/provider/write/normalize.rs",
         "apps/aether-gateway/src/handlers/admin/request/system/import.rs",
         "apps/aether-gateway/src/tests/control/admin/system_import.rs",
-        "crates/aether-ai/formats/src/formats/id.rs",
+        "crates/aether-ai/metadata/src/id.rs",
         "crates/aether-ai/formats/src/formats/matrix.rs",
         "crates/aether-ai/formats/src/formats/registry.rs",
         "crates/aether-data/runtime/src/migrate.rs",

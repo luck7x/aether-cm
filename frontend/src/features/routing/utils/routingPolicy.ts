@@ -7,11 +7,13 @@ export type RoutingSortingScope = 'unified' | 'per_model'
 
 /** 首个候选（粘性 Key）的总尝试次数默认值：失败后同 Key 重试 1 次 */
 export const DEFAULT_STICKY_KEY_ATTEMPTS = 2
+export const MAX_STICKY_KEY_ATTEMPTS = 0xffff_ffff
 
 export interface RoutingDefaultPolicy extends RoutingFailoverPolicy {
   priority_mode: RoutingPriorityMode
   scheduling_mode: RoutingSchedulingMode
   keep_priority_on_conversion: boolean
+  strict_format_conversion: boolean
   enable_cf_heartbeat: boolean
   cyber_continue_failover: boolean
   cancel_on_client_disconnect: boolean
@@ -87,6 +89,7 @@ export function createEmptyRoutingGroupConfig(): RoutingGroupConfig {
       priority_mode: 'provider',
       scheduling_mode: 'cache_affinity',
       keep_priority_on_conversion: false,
+      strict_format_conversion: false,
       enable_cf_heartbeat: false,
       cyber_continue_failover: false,
       cancel_on_client_disconnect: false,
@@ -105,10 +108,14 @@ export function parseBillingMultiplier(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
 }
 
+export function parseStickyKeyAttempts(value: unknown): number | null {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) return null
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= MAX_STICKY_KEY_ATTEMPTS ? parsed : null
+}
+
 export function normalizeStickyKeyAttempts(value: unknown): number {
-  const parsed = Math.trunc(Number(value))
-  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_STICKY_KEY_ATTEMPTS
-  return Math.min(parsed, 99)
+  return parseStickyKeyAttempts(value) ?? DEFAULT_STICKY_KEY_ATTEMPTS
 }
 
 export function createEmptyModelPolicy(model = ''): RoutingModelPolicy {
@@ -144,6 +151,7 @@ export function normalizeRoutingGroupConfig(value: Partial<RoutingGroupConfig> |
       ...base.default_policy,
       ...defaultPolicyWithoutLegacyHeartbeat,
       ...normalizeRoutingFailoverPolicy(rawDefaultPolicy),
+      strict_format_conversion: rawDefaultPolicy.strict_format_conversion === true,
       enable_cf_heartbeat: Boolean(
         rawDefaultPolicy.enable_cf_heartbeat || legacyImageHeartbeat || legacyTextHeartbeat,
       ),
