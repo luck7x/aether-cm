@@ -654,7 +654,8 @@ impl OpenAiImageStreamTerminalState {
         let event = match serde_json::from_str::<Value>(&data) {
             Ok(event) => event,
             Err(err) => {
-                self.observation_error.get_or_insert_with(|| err.to_string());
+                self.observation_error
+                    .get_or_insert_with(|| err.to_string());
                 return Ok(());
             }
         };

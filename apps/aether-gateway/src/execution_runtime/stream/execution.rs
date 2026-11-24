@@ -1151,7 +1151,9 @@ fn finalize_stream_usage_observer(
     let mut fallback_usage = buffer.fallback.finish(report_context);
     let fallback_tier = buffer.fallback.take_service_tier();
     if let Some(summary) = summary.as_mut() {
-        if (summary.parser_error.is_some() || summary.observation_error.is_some()) && fallback_usage.is_some() {
+        if (summary.parser_error.is_some() || summary.observation_error.is_some())
+            && fallback_usage.is_some()
+        {
             // A partial observation can retain an earlier usage snapshot. Later
             // complete fallback events remain authoritative even when their
             // signal score is unchanged or an explicit zero reduces it.
@@ -8056,7 +8058,9 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
             &mut stream_usage_observer,
             stream_usage_report_context.as_ref(),
             &mut stream_usage_observer_buffered,
-            stream_terminal_summary.as_ref().is_some_and(|summary| summary.observed_finish),
+            stream_terminal_summary
+                .as_ref()
+                .is_some_and(|summary| summary.observed_finish),
         );
         stream_terminal_summary = merge_observed_stream_terminal_summary(
             stream_terminal_summary,
@@ -9775,9 +9779,13 @@ mod tests {
         }
         super::observe_stream_usage_bytes(observer.as_mut().unwrap(), &context, &mut buffer,
             b"data: {\"\\u0075sage\":{\"prompt_tokens\":100,\"completion_tokens\":500,\"prompt_tokens_details\":{\"cached_tokens\":0}},\"service_tier\":\"priority\"}\n\n");
-        let summary =
-            super::finalize_stream_usage_observer(&mut observer, Some(&context), &mut buffer, false)
-                .unwrap();
+        let summary = super::finalize_stream_usage_observer(
+            &mut observer,
+            Some(&context),
+            &mut buffer,
+            false,
+        )
+        .unwrap();
         assert!(summary
             .observation_error
             .as_deref()
@@ -9815,8 +9823,17 @@ mod tests {
         assert_eq!(merged.response_id.as_deref(), Some("authoritative-eof-id"));
         assert_eq!(merged.finish_reason.as_deref(), Some("stop"));
         assert!(merged.observed_finish);
-        assert!(merged.observation_error.as_deref().unwrap().contains("exceeded"));
-        assert!(!super::stream_terminal_summary_represents_failure_with_requirement(Some(&merged), true));
+        assert!(merged
+            .observation_error
+            .as_deref()
+            .unwrap()
+            .contains("exceeded"));
+        assert!(
+            !super::stream_terminal_summary_represents_failure_with_requirement(
+                Some(&merged),
+                true
+            )
+        );
         let usage = merged.standardized_usage.unwrap();
         assert_eq!(usage.input_tokens, 100);
         assert_eq!(usage.output_tokens, 500);
@@ -9867,9 +9884,13 @@ mod tests {
             let tail = rewriter.finish().unwrap();
             client.append(&tail, 32 * 1024, &mut client_truncated);
             delivered.extend(tail);
-            let summary =
-                super::finalize_stream_usage_observer(&mut observer, Some(&context), &mut buffer, false)
-                    .unwrap();
+            let summary = super::finalize_stream_usage_observer(
+                &mut observer,
+                Some(&context),
+                &mut buffer,
+                false,
+            )
+            .unwrap();
             assert!(summary.observed_finish);
             assert!(summary.parser_error.is_none());
             let payload = super::build_stream_usage_payload(
