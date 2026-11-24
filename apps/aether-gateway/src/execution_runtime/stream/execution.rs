@@ -66,7 +66,7 @@ use self::execution_failures::{
 use crate::ai_serving::api::{
     extract_provider_private_stream_error_body, maybe_bridge_standard_sync_json_to_stream,
     maybe_build_provider_private_stream_normalizer, maybe_build_stream_response_rewriter,
-    normalize_provider_private_report_context, StreamingStandardTerminalObserver,
+    normalize_provider_private_report_context, SseRecordReader, StreamingStandardTerminalObserver,
     CLAUDE_CHAT_STREAM_PLAN_KIND, CLAUDE_CLI_STREAM_PLAN_KIND, GEMINI_CHAT_STREAM_PLAN_KIND,
     GEMINI_CLI_STREAM_PLAN_KIND, GEMINI_INTERACTIONS_STREAM_PLAN_KIND,
     OPENAI_CHAT_STREAM_PLAN_KIND, OPENAI_IMAGE_STREAM_PLAN_KIND,
@@ -5272,7 +5272,7 @@ enum SseTerminalPolicy {
 }
 
 pub(crate) struct ClientVisibleStreamCompletionTracker {
-    records: aether_ai_formats::formats::shared::sse::SseRecordReader,
+    records: SseRecordReader,
     completed: bool,
     successfully_completed: bool,
 }
@@ -5280,9 +5280,7 @@ pub(crate) struct ClientVisibleStreamCompletionTracker {
 impl Default for ClientVisibleStreamCompletionTracker {
     fn default() -> Self {
         Self {
-            records: aether_ai_formats::formats::shared::sse::SseRecordReader::new(
-                SSE_TERMINAL_DETECTOR_MAX_RECORD_BYTES,
-            ),
+            records: SseRecordReader::new(SSE_TERMINAL_DETECTOR_MAX_RECORD_BYTES),
             completed: false,
             successfully_completed: false,
         }

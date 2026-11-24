@@ -143,7 +143,9 @@ pub use crate::formats::shared::routing::{
     sanitize_request_path_and_query, sanitize_request_query_string,
     supports_stream_execution_decision_kind, supports_sync_execution_decision_kind,
 };
-pub use crate::formats::shared::sse::{encode_done_sse, encode_json_sse, map_claude_stop_reason};
+pub use crate::formats::shared::sse::{
+    encode_done_sse, encode_json_sse, map_claude_stop_reason, SseRecordReader,
+};
 pub use crate::formats::shared::standard_matrix::normalize_standard_request_to_openai_chat_request;
 pub use crate::formats::shared::stream_core::common::*;
 pub use crate::formats::shared::stream_core::{

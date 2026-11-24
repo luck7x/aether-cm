@@ -1,4 +1,3 @@
-use aether_ai_formats::formats::shared::sse::SseRecordReader;
 use aether_contracts::StandardizedUsage;
 use aether_data_contracts::repository::usage::extract_provider_actual_service_tier_from_response;
 use aether_usage_runtime::{map_usage, map_usage_from_response};
@@ -7,6 +6,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use super::commit_policy::find_sse_record_boundary;
+use crate::ai_serving::api::SseRecordReader;
 
 /// Retain only the current protocol record and the latest usage signal. This
 /// preserves the old captured-body billing fallback when audit capture stops.

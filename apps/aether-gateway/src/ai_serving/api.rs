@@ -55,7 +55,7 @@ pub(crate) use aether_ai_formats::api::{
     CanonicalStreamEvent, CanonicalStreamFrame, ClaudeClientEmitter, ExecutionRuntimeAuthContext,
     LocalCoreSyncErrorKind, LocalOpenAiImageSpec, LocalSameFormatProviderFamily,
     LocalSameFormatProviderSpec, LocalStandardSourceFamily, LocalStandardSourceMode,
-    LocalStandardSpec, OpenAIChatClientEmitter, OpenAIResponsesClientEmitter,
+    LocalStandardSpec, OpenAIChatClientEmitter, OpenAIResponsesClientEmitter, SseRecordReader,
     StreamingStandardTerminalObserver, CLAUDE_CHAT_STREAM_PLAN_KIND, CLAUDE_CLI_STREAM_PLAN_KIND,
     EXECUTION_RUNTIME_STREAM_DECISION_ACTION, EXECUTION_RUNTIME_SYNC_DECISION_ACTION,
     GEMINI_CHAT_STREAM_PLAN_KIND, GEMINI_CLI_STREAM_PLAN_KIND, GEMINI_EMBEDDING_SYNC_PLAN_KIND,
