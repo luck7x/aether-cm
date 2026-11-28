@@ -163,7 +163,7 @@ async fn assert_generation_lease_released(state: &AppState, lease_key: &str) {
 async fn assert_empty_generation_response(response: axum::http::Response<Body>) {
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
     let body: Value = serde_json::from_slice(&body).expect("error should be native Gemini JSON");
     assert_eq!(body["error"]["code"], 502);
     assert_eq!(body["error"]["status"], "INTERNAL");
@@ -344,7 +344,7 @@ async fn hydrogen_successful_generation_is_forwarded_without_empty_generation_er
         panic!("normal generated content should be delivered");
     };
     assert_eq!(response.status(), StatusCode::OK);
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
     let text = std::str::from_utf8(&bytes).unwrap();
     assert!(text.contains("ok"));
     assert!(!text.contains("antigravity_empty_generation"));
