@@ -22,6 +22,8 @@ use crate::plan_usage_policy::PlanUsagePolicySnapshot;
 #[derive(Debug)]
 pub(super) struct LogicalTurn {
     pub(super) client_event: Value,
+    /// Provider-issued identity of the response currently being generated.
+    pub(super) provider_response_id: Option<String>,
     /// 这一轮的 `client_event` 是否实际命中过 PII 脱敏。
     ///
     /// 透明重试（配额换 key）会重建 planning parts 并重放同一份事件，
@@ -57,6 +59,7 @@ impl LogicalTurn {
     pub(super) fn new(client_event: Value, turn_index: u64, logical_turn_id: String) -> Self {
         Self {
             client_event,
+            provider_response_id: None,
             client_event_pii_redacted: false,
             provider_store: false,
             turn_index,

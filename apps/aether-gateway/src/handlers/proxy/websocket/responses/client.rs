@@ -197,6 +197,14 @@ pub(super) async fn forward_client_message(
     match client_message {
         AxumWsMessage::Text(text) => {
             let text = text.to_string();
+            // Codex 0.172 sends this control event when cancelling or steering
+            // an in-flight response. It belongs to the bound physical socket,
+            // not the response.create planner or a new billable turn.
+            if let Ok(event) = serde_json::from_str::<Value>(&text) {
+                if event.get("type").and_then(Value::as_str) == Some("response.interrupt") {
+                    return forward_response_interrupt(event, bound, client_socket).await;
+                }
+            }
             let mut client_event = match parse_response_create_event(&text) {
                 Ok(event) => event,
                 Err(error) => {
@@ -559,6 +567,76 @@ pub(super) async fn forward_client_message(
             }
             RelayDisposition::Close
         }
+    }
+}
+
+fn validate_response_interrupt(event: &Value) -> Result<&str, &'static str> {
+    if event.get("stream_id").is_some() {
+        return Err("responses_websocket_named_stream_unsupported");
+    }
+    let id = event
+        .get("response_id")
+        .and_then(Value::as_str)
+        .filter(|id| {
+            !id.trim().is_empty()
+                && id.len() <= super::request::MAX_RESPONSES_WEBSOCKET_RESPONSE_ID_BYTES
+        })
+        .ok_or("invalid_response_interrupt_response_id")?;
+    if event.get("mode").and_then(Value::as_str) != Some("discard_partial_items") {
+        return Err("invalid_response_interrupt_mode");
+    }
+    Ok(id)
+}
+
+async fn forward_response_interrupt(
+    event: Value,
+    bound: &mut BoundResponsesConnection,
+    client_socket: &mut WebSocket,
+) -> RelayDisposition {
+    let response_id = match validate_response_interrupt(&event) {
+        Ok(id) => id,
+        Err(code) => {
+            send_gateway_error(
+                client_socket,
+                code,
+                "Invalid response.interrupt control event",
+            )
+            .await;
+            return RelayDisposition::Continue;
+        }
+    };
+    let owned = match bound.turn_state.logical() {
+        Some(logical) => logical.provider_response_id.as_deref() == Some(response_id),
+        // Completion can race the client's interrupt. The provider must still
+        // receive it and acknowledge the already completed response.
+        None => bound.continuation_response_ids.contains(response_id),
+    };
+    if !owned {
+        send_gateway_error(
+            client_socket,
+            "response_interrupt_response_not_found",
+            "response.interrupt must reference a response on this connection",
+        )
+        .await;
+        return RelayDisposition::Continue;
+    }
+    mark_active_response_retry_unsafe(bound, "client_response_interrupt");
+    let Some(upstream) = bound.upstream.as_mut() else {
+        return RelayDisposition::UpstreamError("responses_websocket_send_failed");
+    };
+    // Cleanup must remain possible even when a generation admission lease is
+    // no longer healthy. Do not re-plan, synthesize an acknowledgement, or end
+    // accounting: relay the provider's acknowledgement and terminal normally.
+    match send_responses_websocket_upstream_message(
+        upstream,
+        WreqWsMessage::text(event.to_string()),
+        None,
+        |_| {},
+    )
+    .await
+    {
+        Ok(()) => RelayDisposition::Continue,
+        Err(_) => RelayDisposition::UpstreamError("responses_websocket_send_failed"),
     }
 }
 
