@@ -286,41 +286,45 @@ async fn flash_other_envelope_and_bare_disconnect_keep_existing_failure_effects(
 
 #[tokio::test]
 async fn hydrogen_real_http_429_keeps_rate_limit_feedback() {
-    let (state, plan, context, lease_key) =
-        generation_fixture("gemini-4-hydrogen", "antigravity:v1internal", false).await;
-    let outcome = execute_generation_frames(
-        &state,
-        &plan,
-        context,
-        vec![
-            json!({"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "slow down"}})
-                .to_string(),
-        ],
-        true,
-        429,
-        true,
-    )
-    .await;
-    assert!(matches!(
-        outcome,
-        AiAttemptExecutionOutcome::Retry {
-            scope: AiAttemptRetryScope::Candidate,
-            ..
-        }
-    ));
-    assert_eq!(
-        generation_cooldown(&state, &plan).await.as_deref(),
-        Some("rate_limited_429")
-    );
-    assert_eq!(
-        stored_generation_key(&state, &plan)
-            .await
-            .health_by_format
-            .as_ref()
-            .unwrap()["gemini:generate_content"]["consecutive_failures"],
-        1
-    );
-    assert_generation_lease_released(&state, &lease_key).await;
+    for (body, expected_cooldown) in [
+        (
+            json!({"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "slow down"}}),
+            "quota_exhausted_429",
+        ),
+        (
+            json!({"error": {"code": 429, "message": "Too many requests"}}),
+            "rate_limited_429",
+        ),
+    ] {
+        let (state, plan, context, lease_key) =
+            generation_fixture("gemini-4-hydrogen", "antigravity:v1internal", false).await;
+        let outcome = execute_generation_frames(
+            &state,
+            &plan,
+            context,
+            vec![body.to_string()],
+            true,
+            429,
+            true,
+        )
+        .await;
+        assert!(matches!(
+            outcome,
+            AiAttemptExecutionOutcome::Retry {
+                scope: AiAttemptRetryScope::Candidate,
+                ..
+            }
+        ));
+        assert_eq!(
+            generation_cooldown(&state, &plan).await.as_deref(),
+            Some(expected_cooldown)
+        );
+        let key = stored_generation_key(&state, &plan).await;
+        let health = &key.health_by_format.as_ref().unwrap()["gemini:generate_content"];
+        assert_eq!(health["consecutive_failures"], 1);
+        assert_eq!(health["health_score"], json!(0.7));
+        assert_generation_lease_released(&state, &lease_key).await;
+    }
 }
 
 #[tokio::test]
