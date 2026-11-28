@@ -287,7 +287,9 @@ async fn invalid_codex_interrupt_does_not_reach_upstream_or_break_the_turn() -> 
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
         client.send(Message::Text(event.to_string().into())).await?;
-        let error = receive_event(&mut client, "error").await?;
+        let error = receive_error_or_close(&mut client)
+            .await?
+            .ok_or("gateway closed instead of rejecting the invalid interrupt")?;
         assert_eq!(error["error"]["code"], expected);
     }
     assert_eq!(harness.upstream.observed_events().await.len(), 1);
