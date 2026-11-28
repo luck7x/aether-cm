@@ -417,6 +417,21 @@ pub(super) async fn relay_bound_connection(
                     .await;
                     break;
                 }
+                if let (Some(frame), Some(logical)) =
+                    (parsed_upstream_frame.as_ref(), bound.turn_state.logical_mut())
+                {
+                    for event in frame.protocol_events() {
+                        if event.get("type").and_then(Value::as_str) == Some("response.created") {
+                            if let Some(id) = event.pointer("/response/id").and_then(Value::as_str) {
+                                if !id.trim().is_empty()
+                                    && id.len() <= super::request::MAX_RESPONSES_WEBSOCKET_RESPONSE_ID_BYTES
+                                {
+                                    logical.provider_response_id = Some(id.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
                 let parsed_upstream_event = parsed_upstream_frame
                     .as_ref()
                     .map(ParsedResponsesWebSocketFrame::event);

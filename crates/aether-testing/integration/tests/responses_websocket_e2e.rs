@@ -164,6 +164,156 @@ async fn continuation_reuses_one_upstream_connection_and_bills_both_turns() -> R
     Ok(())
 }
 
+/// Codex sends response.interrupt while steering/cancelling. Both the
+/// acknowledgement and terminal must pass through, and only creates bill.
+#[tokio::test]
+async fn codex_interrupt_keeps_the_socket_usable_and_bills_only_creates() -> Result<(), BoxError> {
+    let harness = Harness::start_with_fixture(
+        UpstreamBehavior::InterruptThenComplete,
+        ProviderFixture::CodexKeyPair,
+    )
+    .await?;
+    let mut client = harness.connect().await?;
+    client
+        .send(response_create(json!({"input": "first turn"})))
+        .await?;
+    receive_event(&mut client, "response.created").await?;
+    client
+        .send(Message::Text(
+            json!({
+                "type": "response.interrupt", "response_id": "resp-e2e-1",
+                "mode": "discard_partial_items"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await?;
+    let ack = receive_event(&mut client, "response.interrupt.accepted").await?;
+    assert_eq!(ack["response_id"], "resp-e2e-1");
+    receive_event(&mut client, "response.completed").await?;
+    client
+        .send(response_create(json!({
+            "previous_response_id": "resp-e2e-1", "input": "continue"
+        })))
+        .await?;
+    receive_event(&mut client, "response.completed").await?;
+    let events = harness.upstream.observed_events().await;
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[1]["type"], "response.interrupt");
+    assert_eq!(events[1]["response_id"], "resp-e2e-1");
+    assert_eq!(events[2]["previous_response_id"], "resp-e2e-1");
+    assert_eq!(harness.upstream.connections(), 1);
+    assert_eq!(
+        harness
+            .usage_audits_where(2, "two billed creates", is_billed)
+            .await?
+            .len(),
+        2
+    );
+    client.close(None).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn codex_interrupt_after_completion_is_acknowledged_on_the_same_socket(
+) -> Result<(), BoxError> {
+    let harness = Harness::start(UpstreamBehavior::CompleteEveryTurn).await?;
+    let mut client = harness.connect().await?;
+    client
+        .send(response_create(json!({"input": "finish first"})))
+        .await?;
+    receive_event(&mut client, "response.completed").await?;
+    client
+        .send(Message::Text(
+            json!({
+                "type": "response.interrupt", "response_id": "resp-e2e-1",
+                "mode": "discard_partial_items"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await?;
+    receive_event(&mut client, "response.interrupt.accepted").await?;
+    client
+        .send(response_create(json!({"input": "next"})))
+        .await?;
+    receive_event(&mut client, "response.completed").await?;
+    assert_eq!(harness.upstream.connections(), 1);
+    assert_eq!(
+        harness
+            .usage_audits_where(2, "two completed creates", is_billed)
+            .await?
+            .len(),
+        2
+    );
+    client.close(None).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_codex_interrupt_does_not_reach_upstream_or_break_the_turn() -> Result<(), BoxError>
+{
+    let harness = Harness::start(UpstreamBehavior::InterruptThenComplete).await?;
+    let mut client = harness.connect().await?;
+    client
+        .send(response_create(json!({"input": "wait for control"})))
+        .await?;
+    receive_event(&mut client, "response.created").await?;
+    for (extra, expected) in [
+        (
+            json!({"response_id": "other-connection"}),
+            "response_interrupt_response_not_found",
+        ),
+        (
+            json!({"response_id": ""}),
+            "invalid_response_interrupt_response_id",
+        ),
+        (
+            json!({"response_id": 123}),
+            "invalid_response_interrupt_response_id",
+        ),
+        (
+            json!({"mode": "unsupported"}),
+            "invalid_response_interrupt_mode",
+        ),
+        (
+            json!({"stream_id": "named"}),
+            "responses_websocket_named_stream_unsupported",
+        ),
+    ] {
+        let mut event = json!({"type": "response.interrupt", "response_id": "resp-e2e-1", "mode": "discard_partial_items"});
+        event
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        client.send(Message::Text(event.to_string().into())).await?;
+        let error = receive_event(&mut client, "error").await?;
+        assert_eq!(error["error"]["code"], expected);
+    }
+    assert_eq!(harness.upstream.observed_events().await.len(), 1);
+    client
+        .send(Message::Text(
+            json!({
+                "type": "response.interrupt", "response_id": "resp-e2e-1",
+                "mode": "discard_partial_items"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await?;
+    receive_event(&mut client, "response.interrupt.accepted").await?;
+    receive_event(&mut client, "response.completed").await?;
+    assert_eq!(
+        harness
+            .usage_audits_where(1, "one billed create", is_billed)
+            .await?
+            .len(),
+        1
+    );
+    client.close(None).await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn weekly_plan_request_limit_counts_turns_but_not_the_websocket_upgrade(
 ) -> Result<(), BoxError> {
@@ -1156,7 +1306,7 @@ where
                     let event: Value = serde_json::from_str(text.as_ref())?;
                     match event.get("type").and_then(Value::as_str) {
                         Some("error") => {
-                            return Err(format!("gateway returned an error event: {event}").into())
+                            return Err(format!("gateway returned an error event: {event}").into());
                         }
                         Some(event_type) if event_type == expected_type => return Ok(event),
                         _ => {}
@@ -1164,7 +1314,7 @@ where
                 }
                 Message::Ping(payload) => socket.send(Message::Pong(payload)).await?,
                 Message::Close(frame) => {
-                    return Err(format!("gateway closed before {expected_type}: {frame:?}").into())
+                    return Err(format!("gateway closed before {expected_type}: {frame:?}").into());
                 }
                 _ => {}
             }
@@ -1215,6 +1365,8 @@ where
 enum UpstreamBehavior {
     /// Announce, stream one delta, and complete — the ordinary turn.
     CompleteEveryTurn,
+    /// First turn waits for Codex interruption; subsequent turns complete.
+    InterruptThenComplete,
     CompleteAfterRelease,
     /// Announce the response and then go quiet, leaving the turn in flight.
     StallAfterCreated,
@@ -1320,6 +1472,30 @@ async fn run_mock_upstream(
                 let Ok(event) = serde_json::from_str::<Value>(text.as_str()) else {
                     break;
                 };
+                if event.get("type").and_then(Value::as_str) == Some("response.interrupt") {
+                    let response_id = event["response_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    state.events.lock().await.push(event);
+                    if send_mock_event(
+                        &mut socket,
+                        json!({
+                            "type": "response.interrupt.accepted", "response_id": response_id
+                        }),
+                    )
+                    .await
+                    .is_err()
+                    {
+                        break;
+                    }
+                    if state.behavior == UpstreamBehavior::InterruptThenComplete
+                        && send_mock_turn(&mut socket, &response_id).await.is_err()
+                    {
+                        break;
+                    }
+                    continue;
+                }
                 if event.get("type").and_then(Value::as_str) != Some("response.create") {
                     continue;
                 }
@@ -1331,11 +1507,20 @@ async fn run_mock_upstream(
                 let turn = {
                     let mut events = state.events.lock().await;
                     events.push(event);
-                    events.len()
+                    events
+                        .iter()
+                        .filter(|event| event["type"] == "response.create")
+                        .count()
                 };
                 let response_id = format!("resp-e2e-{turn}");
                 match state.behavior {
-                    UpstreamBehavior::CompleteEveryTurn => {
+                    UpstreamBehavior::InterruptThenComplete if turn == 1 => {
+                        if send_mock_created(&mut socket, &response_id).await.is_err() {
+                            break;
+                        }
+                    }
+                    UpstreamBehavior::CompleteEveryTurn
+                    | UpstreamBehavior::InterruptThenComplete => {
                         if send_mock_turn(&mut socket, &response_id).await.is_err() {
                             break;
                         }
