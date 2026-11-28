@@ -60,8 +60,8 @@ mod execution_failures;
 use self::execution_failures::{
     build_stream_failure_from_execution_error, build_stream_failure_from_provider_error_body,
     build_stream_failure_report, build_stream_transport_failure_report,
-    handle_prefetch_provider_private_stream_error, handle_prefetch_stream_failure,
-    submit_midstream_stream_failure, StreamFailureReport,
+    handle_prefetch_provider_private_stream_error, handle_prefetch_request_scoped_generation_error,
+    handle_prefetch_stream_failure, submit_midstream_stream_failure, StreamFailureReport,
 };
 use crate::ai_serving::api::{
     extract_provider_private_stream_error_body, maybe_bridge_standard_sync_json_to_stream,
@@ -6615,6 +6615,33 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
                 if stream_commit_policy.requires_bounded_frame_wait()
                     && stream_commit_gate.is_uncommitted()
                 {
+                    if let Some(error_body) =
+                        super::antigravity_empty_generation::empty_generation_error(
+                            &plan,
+                            report_context.as_ref(),
+                            status_code,
+                            &prefetched_inspection_body,
+                            prefetched_inspection_body_truncated,
+                        )
+                    {
+                        return handle_prefetch_request_scoped_generation_error(
+                            state,
+                            trace_id,
+                            decision,
+                            &plan,
+                            report_context,
+                            request_id,
+                            candidate_id,
+                            report_kind,
+                            headers,
+                            prefetched_usage_telemetry.clone(),
+                            &provider_prefetched_body,
+                            error_body,
+                            retry_scope_out.as_deref_mut(),
+                            retry_fallback_out.as_deref_mut(),
+                        )
+                        .await;
+                    }
                     let error_body_json = anthropic_premature_eof_error_body(
                         "upstream stream ended before the first semantic event",
                     );
@@ -7042,6 +7069,33 @@ async fn execute_stream_from_frame_stream_with_retry_scope(
                     if stream_commit_policy.requires_bounded_frame_wait()
                         && stream_commit_gate.is_uncommitted()
                     {
+                        if let Some(error_body) =
+                            super::antigravity_empty_generation::empty_generation_error(
+                                &plan,
+                                report_context.as_ref(),
+                                status_code,
+                                &prefetched_inspection_body,
+                                prefetched_inspection_body_truncated,
+                            )
+                        {
+                            return handle_prefetch_request_scoped_generation_error(
+                                state,
+                                trace_id,
+                                decision,
+                                &plan,
+                                report_context,
+                                request_id,
+                                candidate_id,
+                                report_kind,
+                                headers,
+                                prefetched_usage_telemetry.clone(),
+                                &provider_prefetched_body,
+                                error_body,
+                                retry_scope_out.as_deref_mut(),
+                                retry_fallback_out.as_deref_mut(),
+                            )
+                            .await;
+                        }
                         let error_body_json = anthropic_premature_eof_error_body(
                             "upstream stream ended before the first semantic event",
                         );
@@ -8393,6 +8447,10 @@ fn apply_stream_summary_report_context(
 
 #[cfg(test)]
 mod tests {
+    mod antigravity_empty_generation_integration_tests {
+        include!("antigravity_empty_generation_integration_tests.rs");
+    }
+
     use std::collections::BTreeMap;
     use std::convert::Infallible;
     use std::sync::{

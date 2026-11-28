@@ -23,7 +23,7 @@ use crate::execution_runtime::submission::{
 };
 use crate::log_ids::short_request_id;
 use crate::orchestration::{
-    apply_local_execution_effect, classify_failure_disposition,
+    apply_local_execution_effect, classify_failure_disposition, release_local_pool_key_lease,
     resolve_local_failover_analysis_for_attempt,
     resolve_local_transport_failover_analysis_for_attempt, with_upstream_response_report_context,
     LocalAdaptiveRateLimitEffect, LocalAttemptFailureEffect, LocalExecutionEffect,
@@ -67,6 +67,23 @@ struct StreamFailureBodyFields<'a> {
 enum StreamFailureHandling {
     Terminal,
     HonorLocalFailover,
+    RequestScopedGeneration { honor_local_failover: bool },
+}
+
+impl StreamFailureHandling {
+    fn honors_local_failover(self) -> bool {
+        matches!(
+            self,
+            Self::HonorLocalFailover
+                | Self::RequestScopedGeneration {
+                    honor_local_failover: true
+                }
+        )
+    }
+
+    fn applies_credential_penalties(self) -> bool {
+        !matches!(self, Self::RequestScopedGeneration { .. })
+    }
 }
 
 const UPSTREAM_STREAM_FAILURE_MESSAGE: &str = "Upstream response stream failed";
@@ -443,74 +460,87 @@ async fn record_stream_sync_failure(
         )
         .await;
     }
-    apply_local_execution_effect(
-        state,
-        LocalExecutionEffectContext {
-            plan,
-            report_context,
-        },
-        LocalExecutionEffect::AttemptFailure(LocalAttemptFailureEffect {
-            status_code: payload.status_code,
-            classification: failure_analysis.classification,
-        }),
-    )
-    .await;
-    apply_local_execution_effect(
-        state,
-        LocalExecutionEffectContext {
-            plan,
-            report_context,
-        },
-        LocalExecutionEffect::AdaptiveRateLimit(LocalAdaptiveRateLimitEffect {
-            status_code: payload.status_code,
-            classification: failure_analysis.classification,
-            headers: Some(&payload.headers),
-        }),
-    )
-    .await;
-    apply_local_execution_effect(
-        state,
-        LocalExecutionEffectContext {
-            plan,
-            report_context,
-        },
-        LocalExecutionEffect::HealthFailure(LocalHealthFailureEffect {
-            status_code: payload.status_code,
-            classification: failure_analysis.classification,
-        }),
-    )
-    .await;
-    apply_local_execution_effect(
-        state,
-        LocalExecutionEffectContext {
-            plan,
-            report_context,
-        },
-        LocalExecutionEffect::OauthInvalidation(LocalOAuthInvalidationEffect {
-            status_code: payload.status_code,
-            response_text: error_body.as_deref(),
-        }),
-    )
-    .await;
-    apply_local_execution_effect(
-        state,
-        LocalExecutionEffectContext {
-            plan,
-            report_context,
-        },
-        LocalExecutionEffect::PoolError(LocalPoolErrorEffect {
-            status_code: payload.status_code,
-            classification: failure_analysis.classification,
-            headers: &payload.headers,
-            error_body: error_body.as_deref(),
-        }),
-    )
-    .await;
+    if handling.applies_credential_penalties() {
+        apply_local_execution_effect(
+            state,
+            LocalExecutionEffectContext {
+                plan,
+                report_context,
+            },
+            LocalExecutionEffect::AttemptFailure(LocalAttemptFailureEffect {
+                status_code: payload.status_code,
+                classification: failure_analysis.classification,
+            }),
+        )
+        .await;
+        apply_local_execution_effect(
+            state,
+            LocalExecutionEffectContext {
+                plan,
+                report_context,
+            },
+            LocalExecutionEffect::AdaptiveRateLimit(LocalAdaptiveRateLimitEffect {
+                status_code: payload.status_code,
+                classification: failure_analysis.classification,
+                headers: Some(&payload.headers),
+            }),
+        )
+        .await;
+        apply_local_execution_effect(
+            state,
+            LocalExecutionEffectContext {
+                plan,
+                report_context,
+            },
+            LocalExecutionEffect::HealthFailure(LocalHealthFailureEffect {
+                status_code: payload.status_code,
+                classification: failure_analysis.classification,
+            }),
+        )
+        .await;
+        apply_local_execution_effect(
+            state,
+            LocalExecutionEffectContext {
+                plan,
+                report_context,
+            },
+            LocalExecutionEffect::OauthInvalidation(LocalOAuthInvalidationEffect {
+                status_code: payload.status_code,
+                response_text: error_body.as_deref(),
+            }),
+        )
+        .await;
+        apply_local_execution_effect(
+            state,
+            LocalExecutionEffectContext {
+                plan,
+                report_context,
+            },
+            LocalExecutionEffect::PoolError(LocalPoolErrorEffect {
+                status_code: payload.status_code,
+                classification: failure_analysis.classification,
+                headers: &payload.headers,
+                error_body: error_body.as_deref(),
+            }),
+        )
+        .await;
+    } else {
+        // This failure says nothing about another request's ability to use the
+        // credential. Still release the per-attempt lease normally owned by PoolError.
+        release_local_pool_key_lease(
+            state,
+            LocalExecutionEffectContext {
+                plan,
+                report_context,
+            },
+        )
+        .await;
+    }
     let retrying_next_candidate = matches!(
         failure_analysis.decision,
         LocalFailoverDecision::RetryNextCandidate
     );
-    if !matches!(handling, StreamFailureHandling::HonorLocalFailover) || !retrying_next_candidate {
+    if !handling.honors_local_failover() || !retrying_next_candidate {
         crate::execution_runtime::mark_stream_candidate_watchdog_terminal_started();
         let analytics_context =
             crate::usage::reporting::failure::sync_analytics_context(report_context, payload);
@@ -561,6 +591,97 @@ async fn record_stream_sync_failure(
     )
     .await;
     failure_analysis
+}
+
+/// Called only after the Hydrogen-specific, pre-semantic EOF guard positively
+/// recognizes an input-only empty generation. No other failure uses this path.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn handle_prefetch_request_scoped_generation_error(
+    state: &AppState,
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+    plan: &ExecutionPlan,
+    report_context: Option<Value>,
+    request_id: &str,
+    candidate_id: Option<&str>,
+    report_kind: &str,
+    mut headers: std::collections::BTreeMap<String, String>,
+    telemetry: Option<ExecutionTelemetry>,
+    buffered_body: &[u8],
+    error_body: Value,
+    retry_scope_out: Option<&mut AiAttemptRetryScope>,
+    retry_fallback_out: Option<&mut Option<Response<Body>>>,
+) -> Result<Option<Response<Body>>, GatewayError> {
+    headers.retain(|name, _| {
+        !name.eq_ignore_ascii_case("content-encoding")
+            && !name.eq_ignore_ascii_case("content-length")
+            && !name.eq_ignore_ascii_case("content-type")
+    });
+    headers.insert("content-type".into(), "application/json".into());
+    let payload = GatewaySyncReportRequest {
+        trace_id: trace_id.to_string(),
+        report_kind: report_kind.to_string(),
+        report_context,
+        status_code: 502,
+        headers,
+        body_json: Some(error_body),
+        client_body_json: None,
+        body_base64: encode_bounded_stream_capture(buffered_body),
+        telemetry,
+    };
+    let honor_local_failover = retry_scope_out.is_some();
+    let analysis = record_stream_sync_failure(
+        state,
+        plan,
+        payload.report_context.as_ref(),
+        &payload,
+        Some(502),
+        None,
+        StreamFailureHandling::RequestScopedGeneration {
+            honor_local_failover,
+        },
+    )
+    .await;
+    if honor_local_failover
+        && matches!(analysis.decision, LocalFailoverDecision::RetryNextCandidate)
+    {
+        if let Some(retry_scope) = retry_scope_out {
+            // Exclude this credential only within the existing bounded attempt loop.
+            *retry_scope = AiAttemptRetryScope::Credential;
+        }
+        if let Some(fallback) = retry_fallback_out {
+            let body = serde_json::to_vec(&payload.body_json).map_err(|_| {
+                GatewayError::Internal("failed to encode empty generation error".to_string())
+            })?;
+            *fallback = Some(attach_control_metadata_headers(
+                crate::api::response::build_client_response_from_parts(
+                    502,
+                    &payload.headers,
+                    Body::from(body),
+                    trace_id,
+                    Some(decision),
+                )?,
+                Some(request_id),
+                candidate_id,
+            )?);
+        }
+        warn!(
+            event_name = "antigravity_empty_generation_retry_scheduled",
+            log_type = "event",
+            trace_id = %trace_id,
+            request_id = %request_id,
+            candidate_id = ?candidate_id,
+            "retrying empty Hydrogen generation without credential penalties"
+        );
+        return Ok(None);
+    }
+    let response =
+        submit_local_core_error_or_sync_finalize(state, trace_id, decision, payload).await?;
+    Ok(Some(attach_control_metadata_headers(
+        response,
+        Some(request_id),
+        candidate_id,
+    )?))
 }
 
 #[allow(clippy::too_many_arguments)] // internal helper for prefetch error handling
